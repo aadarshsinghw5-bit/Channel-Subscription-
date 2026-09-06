@@ -1,7 +1,6 @@
 pyTelegramBotAPI
 pymongo
-APScheduler
-Flask
 pycountry
 pytz
-tzdata
+APScheduler
+Flask

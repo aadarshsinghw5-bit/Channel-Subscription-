@@ -2,5 +2,5 @@ pyTelegramBotAPI
 pymongo
 APScheduler
 Flask
-timezonefinder
-tzdata
+pytz
+pycountry

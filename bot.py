@@ -3,12 +3,18 @@ import telebot
 
 from telebot.types import (
     InlineKeyboardMarkup,
-    InlineKeyboardButton
+    InlineKeyboardButton,
+    KeyboardButton,
+    ReplyKeyboardMarkup
 )
 
 from pymongo import MongoClient
 
 from datetime import datetime, timedelta
+
+from zoneinfo import ZoneInfo
+
+from timezonefinder import TimezoneFinder
 
 from apscheduler.schedulers.background import BackgroundScheduler
 
@@ -60,6 +66,15 @@ bot = telebot.TeleBot(BOT_TOKEN)
 
 
 # ============================================================
+# TIMEZONE
+# ============================================================
+
+IST = ZoneInfo("Asia/Kolkata")
+
+timezone_finder = TimezoneFinder()
+
+
+# ============================================================
 # MONGODB
 # ============================================================
 
@@ -76,6 +91,7 @@ users_col = db["users"]
 # ============================================================
 
 def format_plan(minutes):
+
     minutes = int(minutes)
 
     if minutes == 1:
@@ -130,6 +146,159 @@ def format_remaining(seconds):
     return f"{secs}s"
 
 
+def get_user_timezone(user_id):
+
+    user = users_col.find_one(
+        {
+            "user_id": user_id
+        },
+        {
+            "timezone": 1
+        }
+    )
+
+    if user and user.get("timezone"):
+
+        try:
+
+            return ZoneInfo(
+                user["timezone"]
+            )
+
+        except Exception:
+
+            pass
+
+    return None
+
+
+def format_user_time(timestamp, timezone):
+
+    if not timestamp:
+        return "Unknown"
+
+    try:
+
+        return datetime.fromtimestamp(
+            timestamp,
+            timezone
+        ).strftime(
+            "%d %b %Y, %I:%M %p"
+        )
+
+    except Exception:
+
+        return "Unknown"
+
+
+def format_ist_time(timestamp):
+
+    if not timestamp:
+        return "Unknown"
+
+    return datetime.fromtimestamp(
+        timestamp,
+        IST
+    ).strftime(
+        "%d %b %Y, %I:%M %p"
+    )
+
+
+def show_timezone_request(chat_id):
+
+    markup = ReplyKeyboardMarkup(
+        resize_keyboard=True,
+        one_time_keyboard=True
+    )
+
+    location_button = KeyboardButton(
+        "📍 Share My Location",
+        request_location=True
+    )
+
+    markup.add(location_button)
+
+    bot.send_message(
+
+        chat_id,
+
+        "🌍 *Set Your Timezone*\n\n"
+
+        "To show your subscription time correctly, "
+        "please share your current location.\n\n"
+
+        "📍 Your location will only be used to detect "
+        "your timezone.",
+
+        reply_markup=markup,
+
+        parse_mode="Markdown"
+    )
+
+
+def send_channel_plans(
+    chat_id,
+    ch_id
+):
+
+    ch_data = channels_col.find_one(
+        {
+            "channel_id": ch_id
+        }
+    )
+
+    if not ch_data:
+        return False
+
+    markup = InlineKeyboardMarkup()
+
+    for p_time, p_price in ch_data["plans"].items():
+
+        label = format_plan(
+            int(p_time)
+        )
+
+        markup.add(
+
+            InlineKeyboardButton(
+
+                f"💳 {label} - ₹{p_price}",
+
+                callback_data=(
+                    f"select_{ch_id}_{p_time}"
+                )
+            )
+        )
+
+    markup.add(
+
+        InlineKeyboardButton(
+
+            "📞 Contact Admin",
+
+            url=f"https://t.me/{CONTACT_USERNAME}"
+        )
+    )
+
+    bot.send_message(
+
+        chat_id,
+
+        f"Welcome!\n\n"
+
+        f"You are joining: "
+        f"*{ch_data['name']}*.\n\n"
+
+        f"Please select a subscription plan below:",
+
+        reply_markup=markup,
+
+        parse_mode="Markdown"
+    )
+
+    return True
+
+
 # ============================================================
 # START
 # ============================================================
@@ -143,7 +312,30 @@ def start_handler(message):
 
 
     # --------------------------------------------------------
-    # USER ENTRY THROUGH DEEP LINK
+    # ADMIN
+    # --------------------------------------------------------
+
+    if user_id == ADMIN_ID and len(text) == 1:
+
+        bot.send_message(
+
+            message.chat.id,
+
+            "✅ *Admin Panel Active!*\n\n"
+
+            "/add - Add/Edit Channel & Prices\n"
+            "/channels - Manage Existing Channels\n"
+            "/users - View Subscribers\n"
+            "/timezone - Change Your Timezone",
+
+            parse_mode="Markdown"
+        )
+
+        return
+
+
+    # --------------------------------------------------------
+    # DEEP LINK
     # --------------------------------------------------------
 
     if len(text) > 1:
@@ -158,88 +350,305 @@ def start_handler(message):
                 }
             )
 
-            if ch_data:
-
-                markup = InlineKeyboardMarkup()
-
-
-                # --------------------------------------------
-                # DISPLAY PLANS
-                # --------------------------------------------
-
-                for p_time, p_price in ch_data["plans"].items():
-
-                    label = format_plan(
-                        int(p_time)
-                    )
-
-                    markup.add(
-                        InlineKeyboardButton(
-                            f"💳 {label} - ₹{p_price}",
-                            callback_data=(
-                                f"select_{ch_id}_{p_time}"
-                            )
-                        )
-                    )
+            if not ch_data:
+                return
 
 
-                markup.add(
-                    InlineKeyboardButton(
-                        "📞 Contact Admin",
-                        url=f"https://t.me/{CONTACT_USERNAME}"
-                    )
+            # ------------------------------------------------
+            # SAVE USER BASIC INFO
+            # ------------------------------------------------
+
+            users_col.update_one(
+
+                {
+                    "user_id": user_id,
+
+                    "channel_id": ch_id
+                },
+
+                {
+                    "$set": {
+
+                        "user_id": user_id,
+
+                        "channel_id": ch_id,
+
+                        "name":
+                            message.from_user.first_name,
+
+                        "username":
+                            message.from_user.username or ""
+
+                    }
+                },
+
+                upsert=True
+            )
+
+
+            # ------------------------------------------------
+            # CHECK TIMEZONE
+            # ------------------------------------------------
+
+            timezone = get_user_timezone(
+                user_id
+            )
+
+
+            if timezone is None:
+
+                users_col.update_one(
+
+                    {
+                        "user_id": user_id
+                    },
+
+                    {
+                        "$set": {
+                            "pending_channel_id": ch_id
+                        }
+                    }
                 )
 
-
-                bot.send_message(
-
-                    message.chat.id,
-
-                    f"Welcome!\n\n"
-                    f"You are joining: "
-                    f"*{ch_data['name']}*.\n\n"
-                    f"Please select a subscription plan below:",
-
-                    reply_markup=markup,
-
-                    parse_mode="Markdown"
+                show_timezone_request(
+                    message.chat.id
                 )
 
                 return
 
+
+            # ------------------------------------------------
+            # SHOW PLANS
+            # ------------------------------------------------
+
+            send_channel_plans(
+
+                message.chat.id,
+
+                ch_id
+            )
+
+            return
+
+
         except Exception:
+
             pass
 
 
     # --------------------------------------------------------
-    # ADMIN PANEL
+    # NORMAL USER START
     # --------------------------------------------------------
 
-    if user_id == ADMIN_ID:
+    if user_id != ADMIN_ID:
+
+        timezone = get_user_timezone(
+            user_id
+        )
+
+        if timezone is None:
+
+            show_timezone_request(
+                message.chat.id
+            )
+
+        else:
+
+            bot.send_message(
+
+                message.chat.id,
+
+                "Welcome!\n\n"
+
+                "To join a channel, please use the link "
+                "provided by the Admin."
+            )
+
+
+# ============================================================
+# LOCATION HANDLER
+# ============================================================
+
+@bot.message_handler(
+    content_types=["location"]
+)
+def receive_location(message):
+
+    user_id = message.from_user.id
+
+    location = message.location
+
+
+    try:
+
+        timezone_name = timezone_finder.timezone_at(
+
+            lat=location.latitude,
+
+            lng=location.longitude
+        )
+
+
+        if not timezone_name:
+
+            bot.send_message(
+
+                message.chat.id,
+
+                "❌ Sorry, I couldn't detect your timezone.\n\n"
+                "Please try sharing your location again."
+            )
+
+            return
+
+
+        # ----------------------------------------------------
+        # SAVE TIMEZONE
+        # ----------------------------------------------------
+
+        users_col.update_many(
+
+            {
+                "user_id": user_id
+            },
+
+            {
+                "$set": {
+                    "timezone": timezone_name
+                }
+            }
+        )
+
+
+        # If no existing user document exists,
+        # create one.
+
+        users_col.update_one(
+
+            {
+                "user_id": user_id
+            },
+
+            {
+                "$set": {
+
+                    "user_id": user_id,
+
+                    "name":
+                        message.from_user.first_name,
+
+                    "username":
+                        message.from_user.username or "",
+
+                    "timezone":
+                        timezone_name
+
+                }
+            },
+
+            upsert=True
+        )
+
+
+        # ----------------------------------------------------
+        # REMOVE LOCATION KEYBOARD
+        # ----------------------------------------------------
+
+        remove_markup = ReplyKeyboardMarkup(
+            resize_keyboard=True
+        )
+
+        remove_markup.add(
+            KeyboardButton("✅ Timezone Saved")
+        )
+
 
         bot.send_message(
 
             message.chat.id,
 
-            "✅ *Admin Panel Active!*\n\n"
+            f"✅ *Timezone Detected!*\n\n"
 
-            "/add - Add/Edit Channel & Prices\n"
-            "/channels - Manage Existing Channels\n"
-            "/users - View Subscribers",
+            f"🌍 Timezone: `{timezone_name}`\n\n"
+
+            "Your subscription times will now be shown "
+            "according to your local time.",
+
+            reply_markup=remove_markup,
 
             parse_mode="Markdown"
         )
 
-    else:
+
+        # ----------------------------------------------------
+        # OPEN PENDING CHANNEL
+        # ----------------------------------------------------
+
+        pending = users_col.find_one(
+            {
+                "user_id": user_id,
+
+                "pending_channel_id": {
+                    "$exists": True
+                }
+            }
+        )
+
+
+        if pending:
+
+            ch_id = pending.get(
+                "pending_channel_id"
+            )
+
+
+            users_col.update_one(
+
+                {
+                    "_id": pending["_id"]
+                },
+
+                {
+                    "$unset": {
+                        "pending_channel_id": ""
+                    }
+                }
+            )
+
+
+            if ch_id:
+
+                send_channel_plans(
+
+                    message.chat.id,
+
+                    int(ch_id)
+                )
+
+
+    except Exception as e:
 
         bot.send_message(
 
-            message.chat.id,
+            ADMIN_ID,
 
-            "Welcome!\n\n"
-            "To join a channel, please use the link "
-            "provided by the Admin."
+            f"❌ Timezone Detection Error:\n"
+            f"`{e}`",
+
+            parse_mode="Markdown"
         )
+
+
+# ============================================================
+# /TIMEZONE
+# ============================================================
+
+@bot.message_handler(commands=["timezone"])
+def timezone_command(message):
+
+    show_timezone_request(
+        message.chat.id
+    )
 
 
 # ============================================================
@@ -265,9 +674,14 @@ def list_channels(message):
     for ch in cursor:
 
         markup.add(
+
             InlineKeyboardButton(
+
                 f"Channel: {ch['name']}",
-                callback_data=f"manage_{ch['channel_id']}"
+
+                callback_data=(
+                    f"manage_{ch['channel_id']}"
+                )
             )
         )
 
@@ -275,8 +689,11 @@ def list_channels(message):
 
 
     markup.add(
+
         InlineKeyboardButton(
+
             "➕ Add New Channel",
+
             callback_data="add_new"
         )
     )
@@ -680,8 +1097,6 @@ def admin_notify(call):
         plan_name = format_plan(mins)
 
 
-        # Save/update pending payment
-
         users_col.update_one(
 
             {
@@ -705,7 +1120,8 @@ def admin_notify(call):
 
                     "status": "payment_pending",
 
-                    "requested_at": datetime.now().timestamp()
+                    "requested_at":
+                        datetime.now().timestamp()
 
                 }
             },
@@ -734,7 +1150,9 @@ def admin_notify(call):
 
                 "❌ Reject",
 
-                callback_data=f"rej_{user.id}_{ch_id}"
+                callback_data=(
+                    f"rej_{user.id}_{ch_id}"
+                )
             )
         )
 
@@ -819,8 +1237,6 @@ def admin_notify(call):
 )
 def approve_now(call):
 
-    # OWNER CHECK
-
     if call.from_user.id != ADMIN_ID:
 
         bot.answer_callback_query(
@@ -873,11 +1289,6 @@ def approve_now(call):
         plan_name = format_plan(mins)
 
 
-        # ----------------------------------------------------
-        # IMPORTANT:
-        # Subscription timer DOES NOT start here.
-        # ----------------------------------------------------
-
         users_col.update_one(
 
             {
@@ -891,7 +1302,8 @@ def approve_now(call):
 
                     "status": "waiting",
 
-                    "approved_at": datetime.now().timestamp()
+                    "approved_at":
+                        datetime.now().timestamp()
 
                 },
 
@@ -907,9 +1319,6 @@ def approve_now(call):
             }
         )
 
-
-        # Invite has no subscription expiry.
-        # Timer will start when user actually joins.
 
         link = bot.create_chat_invite_link(
 
@@ -928,7 +1337,8 @@ def approve_now(call):
             {
                 "$set": {
 
-                    "invite_link": link.invite_link
+                    "invite_link":
+                        link.invite_link
 
                 }
             }
@@ -1010,8 +1420,6 @@ def approve_now(call):
 )
 def reject_payment(call):
 
-    # OWNER CHECK
-
     if call.from_user.id != ADMIN_ID:
 
         bot.answer_callback_query(
@@ -1035,8 +1443,6 @@ def reject_payment(call):
         ch_id = int(ch_id)
 
 
-        # Remove pending request
-
         users_col.delete_one(
 
             {
@@ -1057,8 +1463,6 @@ def reject_payment(call):
         )
 
 
-        # Notify user
-
         bot.send_message(
 
             u_id,
@@ -1071,8 +1475,6 @@ def reject_payment(call):
             parse_mode="Markdown"
         )
 
-
-        # Notify owner
 
         bot.send_message(
 
@@ -1087,8 +1489,6 @@ def reject_payment(call):
             parse_mode="Markdown"
         )
 
-
-        # Update owner message
 
         bot.edit_message_text(
 
@@ -1153,8 +1553,6 @@ def track_channel_join(update):
         ]
 
 
-        # User already was a member
-
         if (
 
             new_status in joined_statuses
@@ -1165,8 +1563,6 @@ def track_channel_join(update):
 
             return
 
-
-        # User must have newly joined
 
         if new_status not in joined_statuses:
 
@@ -1211,6 +1607,11 @@ def track_channel_join(update):
         )
 
 
+        joined_timestamp = joined_at.timestamp()
+
+        expiry_timestamp = expiry_datetime.timestamp()
+
+
         users_col.update_one(
 
             {
@@ -1221,10 +1622,10 @@ def track_channel_join(update):
                 "$set": {
 
                     "joined_at":
-                        joined_at.timestamp(),
+                        joined_timestamp,
 
                     "expiry":
-                        expiry_datetime.timestamp(),
+                        expiry_timestamp,
 
                     "status":
                         "active",
@@ -1246,6 +1647,48 @@ def track_channel_join(update):
 
 
         # ----------------------------------------------------
+        # ADMIN TIME = IST
+        # ----------------------------------------------------
+
+        admin_joined_text = format_ist_time(
+            joined_timestamp
+        )
+
+        admin_expiry_text = format_ist_time(
+            expiry_timestamp
+        )
+
+
+        # ----------------------------------------------------
+        # USER TIMEZONE
+        # ----------------------------------------------------
+
+        user_timezone = get_user_timezone(
+            user.id
+        )
+
+
+        if user_timezone is None:
+
+            user_timezone = IST
+
+
+        user_joined_text = format_user_time(
+
+            joined_timestamp,
+
+            user_timezone
+        )
+
+        user_expiry_text = format_user_time(
+
+            expiry_timestamp,
+
+            user_timezone
+        )
+
+
+        # ----------------------------------------------------
         # OWNER NOTIFICATION
         # ----------------------------------------------------
 
@@ -1260,13 +1703,13 @@ def track_channel_join(update):
             f"Channel ID: `{ch_id}`\n\n"
 
             f"📥 Joined:\n"
-            f"{joined_at.strftime('%d %b %Y, %I:%M %p')}\n\n"
+            f"{admin_joined_text} IST\n\n"
 
             f"📦 Subscription:\n"
             f"{plan_name}\n\n"
 
             f"🔴 Expires:\n"
-            f"{expiry_datetime.strftime('%d %b %Y, %I:%M %p')}",
+            f"{admin_expiry_text} IST",
 
             parse_mode="Markdown"
         )
@@ -1275,6 +1718,15 @@ def track_channel_join(update):
         # ----------------------------------------------------
         # USER NOTIFICATION
         # ----------------------------------------------------
+
+        timezone_name = str(
+            getattr(
+                user_timezone,
+                "key",
+                "Asia/Kolkata"
+            )
+        )
+
 
         bot.send_message(
 
@@ -1287,16 +1739,19 @@ def track_channel_join(update):
             f"📦 Duration: *{plan_name}*\n\n"
 
             f"📥 Joined:\n"
-            f"{joined_at.strftime('%d %b %Y, %I:%M %p')}\n\n"
+            f"{user_joined_text}\n\n"
 
             f"🔴 Expires at:\n"
-            f"{expiry_datetime.strftime('%d %b %Y, %I:%M %p')}",
+            f"{user_expiry_text}\n\n"
+
+            f"🌍 Timezone: `{timezone_name}`",
 
             parse_mode="Markdown"
         )
 
 
     except Exception:
+
         pass
 
 
@@ -1334,7 +1789,6 @@ def show_users(message):
 
     now = datetime.now().timestamp()
 
-
     index = 0
 
 
@@ -1345,9 +1799,6 @@ def show_users(message):
             "unknown"
         )
 
-
-        # Don't show payment requests
-        # in subscriber list
 
         if status == "payment_pending":
 
@@ -1411,40 +1862,24 @@ def show_users(message):
             )
 
 
-            if joined_ts:
+            # ADMIN ALWAYS GETS IST
 
-                joined_text = (
+            joined_text = format_ist_time(
+                joined_ts
+            )
 
-                    datetime.fromtimestamp(
-                        joined_ts
-                    ).strftime(
-                        "%d %b %Y, %I:%M %p"
-                    )
-                )
-
-            else:
-
-                joined_text = "Unknown"
+            expiry_text = format_ist_time(
+                expiry_ts
+            )
 
 
             if expiry_ts:
-
-                expiry_text = (
-
-                    datetime.fromtimestamp(
-                        expiry_ts
-                    ).strftime(
-                        "%d %b %Y, %I:%M %p"
-                    )
-                )
-
 
                 remaining_seconds = int(
 
                     expiry_ts - now
 
                 )
-
 
                 remaining = format_remaining(
 
@@ -1453,8 +1888,6 @@ def show_users(message):
                 )
 
             else:
-
-                expiry_text = "Unknown"
 
                 remaining = "Unknown"
 
@@ -1469,9 +1902,9 @@ def show_users(message):
 
                 f"🟢 Status: Active\n"
 
-                f"📥 Joined: {joined_text}\n"
+                f"📥 Joined: {joined_text} IST\n"
 
-                f"🔴 Expires: {expiry_text}\n"
+                f"🔴 Expires: {expiry_text} IST\n"
 
                 f"⏳ Remaining: {remaining}\n\n"
 
@@ -1512,7 +1945,9 @@ def show_users(message):
         return
 
 
-    # Telegram message limit
+    # --------------------------------------------------------
+    # TELEGRAM MESSAGE LIMIT
+    # --------------------------------------------------------
 
     if len(text) <= 4000:
 
@@ -1627,7 +2062,7 @@ def manage_ch(call):
         bot.answer_callback_query(call.id)
 
 
-    except Exception as e:
+    except Exception:
 
         bot.answer_callback_query(
 
@@ -1673,7 +2108,7 @@ def kick_expired_users():
 
 
             # ------------------------------------------------
-            # REMOVE USER FROM CHANNEL
+            # REMOVE USER
             # ------------------------------------------------
 
             bot.ban_chat_member(
@@ -1740,7 +2175,7 @@ def kick_expired_users():
 
 
             # ------------------------------------------------
-            # DELETE ACTIVE SUBSCRIPTION
+            # DELETE SUBSCRIPTION
             # ------------------------------------------------
 
             users_col.delete_one(
@@ -1787,12 +2222,19 @@ if __name__ == "__main__":
     print("Bot is running...")
 
 
-bot.infinity_polling(
-    timeout=20,
-    long_polling_timeout=10,
-    allowed_updates=[
-        "message",
-        "callback_query",
-        "chat_member"
-    ]
-)
+    bot.infinity_polling(
+
+        timeout=20,
+
+        long_polling_timeout=10,
+
+        allowed_updates=[
+
+            "message",
+
+            "callback_query",
+
+            "chat_member"
+
+        ]
+    )

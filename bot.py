@@ -12,7 +12,7 @@ from telebot.types import (
 
 from pymongo import MongoClient
 
-from datetime import datetime, timedelta
+from datetime import datetime
 
 from zoneinfo import ZoneInfo
 
@@ -60,6 +60,16 @@ MONGO_URI = os.getenv("MONGO_URI")
 ADMIN_ID = int(os.getenv("ADMIN_ID"))
 UPI_ID = os.getenv("UPI_ID")
 CONTACT_USERNAME = os.getenv("CONTACT_USERNAME")
+
+
+if not BOT_TOKEN:
+    raise ValueError("BOT_TOKEN environment variable is missing.")
+
+if not MONGO_URI:
+    raise ValueError("MONGO_URI environment variable is missing.")
+
+if not UPI_ID:
+    raise ValueError("UPI_ID environment variable is missing.")
 
 
 bot = telebot.TeleBot(BOT_TOKEN)
@@ -121,7 +131,6 @@ profiles_col = db["profiles"]
 # ============================================================
 
 def format_plan(minutes):
-
     minutes = int(minutes)
 
     if minutes == 1:
@@ -152,16 +161,12 @@ def format_plan(minutes):
 
 
 def format_remaining(seconds):
-
     if seconds <= 0:
         return "Expired"
 
     days = seconds // 86400
-
     hours = (seconds % 86400) // 3600
-
     minutes = (seconds % 3600) // 60
-
     secs = seconds % 60
 
     if days > 0:
@@ -177,7 +182,6 @@ def format_remaining(seconds):
 
 
 def get_user_timezone(user_id):
-
     profile = profiles_col.find_one(
         {
             "user_id": user_id
@@ -188,27 +192,19 @@ def get_user_timezone(user_id):
     )
 
     if profile and profile.get("timezone"):
-
         try:
-
-            return ZoneInfo(
-                profile["timezone"]
-            )
-
+            return ZoneInfo(profile["timezone"])
         except Exception:
-
             pass
 
     return None
 
 
 def format_user_time(timestamp, timezone):
-
     if not timestamp:
         return "Unknown"
 
     try:
-
         return datetime.fromtimestamp(
             timestamp,
             timezone
@@ -217,17 +213,14 @@ def format_user_time(timestamp, timezone):
         )
 
     except Exception:
-
         return "Unknown"
 
 
 def format_ist_time(timestamp):
-
     if not timestamp:
         return "Unknown"
 
     try:
-
         return datetime.fromtimestamp(
             timestamp,
             IST
@@ -236,12 +229,10 @@ def format_ist_time(timestamp):
         )
 
     except Exception:
-
         return "Unknown"
 
 
 def get_contact_username():
-
     if not CONTACT_USERNAME:
         return "Admin"
 
@@ -254,7 +245,6 @@ def get_contact_username():
 
 
 def get_contact_url():
-
     if not CONTACT_USERNAME:
         return None
 
@@ -271,7 +261,6 @@ def get_contact_url():
 # ============================================================
 
 def show_timezone_request(chat_id):
-
     markup = InlineKeyboardMarkup()
 
     row = []
@@ -279,44 +268,31 @@ def show_timezone_request(chat_id):
     for index, (country, timezone_name) in enumerate(
         COUNTRY_BUTTONS
     ):
-
         row.append(
-
             InlineKeyboardButton(
-
                 country,
-
                 callback_data=f"tz_{index}"
             )
         )
 
         if len(row) == 2:
-
             markup.row(*row)
-
             row = []
 
     if row:
         markup.row(*row)
 
     markup.add(
-
         InlineKeyboardButton(
-
             "✍️ Other Country",
-
             callback_data="tz_manual"
         )
     )
 
     bot.send_message(
-
         chat_id,
-
         "🌍 *Please select your country*",
-
         reply_markup=markup,
-
         parse_mode="Markdown"
     )
 
@@ -326,73 +302,50 @@ def save_timezone(
     timezone_name,
     chat_id
 ):
-
     try:
-
         ZoneInfo(timezone_name)
-
     except Exception:
-
         return False
 
-
     profiles_col.update_one(
-
         {
             "user_id": user_id
         },
-
         {
             "$set": {
-
                 "user_id": user_id,
-
                 "timezone": timezone_name
-
             },
-
             "$unset": {
-
                 "awaiting_country": "",
-
                 "timezone_choices": ""
-
             }
         },
-
         upsert=True
     )
-
 
     # --------------------------------------------------------
     # OPEN PENDING CHANNEL
     # --------------------------------------------------------
 
     pending = users_col.find_one(
-
         {
             "user_id": user_id,
-
             "pending_channel_id": {
                 "$exists": True
             }
         }
     )
 
-
     if pending:
-
         ch_id = pending.get(
             "pending_channel_id"
         )
 
-
         users_col.update_one(
-
             {
                 "_id": pending["_id"]
             },
-
             {
                 "$unset": {
                     "pending_channel_id": ""
@@ -400,13 +353,9 @@ def save_timezone(
             }
         )
 
-
         if ch_id:
-
             send_channel_plans(
-
                 chat_id,
-
                 int(ch_id)
             )
 
@@ -414,53 +363,32 @@ def save_timezone(
 
 
 def country_timezones(country_name):
-
     aliases = {
-
         "india": "India",
-
         "pakistan": "Pakistan",
-
         "bangladesh": "Bangladesh",
-
         "nepal": "Nepal",
-
         "sri lanka": "Sri Lanka",
-
         "uae": "United Arab Emirates",
-
         "dubai": "United Arab Emirates",
-
         "saudi": "Saudi Arabia",
-
         "usa": "United States",
-
         "us": "United States",
-
         "united states": "United States",
-
         "uk": "United Kingdom",
-
         "england": "United Kingdom"
-
     }
-
 
     clean_name = " ".join(
         country_name.strip().split()
     )
 
-
     clean_name = aliases.get(
-
         clean_name.lower(),
-
         clean_name
     )
 
-
     try:
-
         country = pycountry.countries.search_fuzzy(
             clean_name
         )[0]
@@ -473,16 +401,13 @@ def country_timezones(country_name):
         )
 
     except Exception:
-
         return []
 
 
 def timezone_choice_keyboard(choices):
-
     markup = InlineKeyboardMarkup()
 
     for index, timezone_name in enumerate(choices):
-
         readable = timezone_name.split("/")[-1]
 
         readable = readable.replace(
@@ -491,11 +416,8 @@ def timezone_choice_keyboard(choices):
         )
 
         markup.add(
-
             InlineKeyboardButton(
-
                 f"🌍 {readable}",
-
                 callback_data=f"tzpick_{index}"
             )
         )
@@ -511,7 +433,6 @@ def send_channel_plans(
     chat_id,
     ch_id
 ):
-
     ch_data = channels_col.find_one(
         {
             "channel_id": ch_id
@@ -521,54 +442,37 @@ def send_channel_plans(
     if not ch_data:
         return False
 
-
     markup = InlineKeyboardMarkup()
 
-
     for p_time, p_price in ch_data["plans"].items():
-
         label = format_plan(
             int(p_time)
         )
 
         markup.add(
-
             InlineKeyboardButton(
-
                 f"💳 {label} - ₹{p_price}",
-
                 callback_data=(
                     f"select_{ch_id}_{p_time}"
                 )
             )
         )
 
-
     contact_url = get_contact_url()
 
     if contact_url:
-
         markup.add(
-
             InlineKeyboardButton(
-
                 "📞 Contact Admin",
-
                 url=contact_url
             )
         )
 
-
     bot.send_message(
-
         chat_id,
-
         f"You Are Joining *{ch_data['name']}*\n\n"
-
         f"💎 Please Select Your Subscription Plan:",
-
         reply_markup=markup,
-
         parse_mode="Markdown"
     )
 
@@ -581,98 +485,74 @@ def send_channel_plans(
 
 @bot.message_handler(commands=["start"])
 def start_handler(message):
-
     user_id = message.from_user.id
 
     text = (message.text or "").split()
-
 
     # --------------------------------------------------------
     # ADMIN
     # --------------------------------------------------------
 
     if user_id == ADMIN_ID and len(text) == 1:
-
         bot.send_message(
-
             message.chat.id,
-
             "✅ *Admin Panel Active!*\n\n"
-
             "/add - Add/Edit Channel & Prices\n"
             "/channels - Manage Existing Channels\n"
             "/users - View Subscribers\n"
             "/timezone - Change Your Timezone",
-
             parse_mode="Markdown"
         )
 
         return
-
 
     # --------------------------------------------------------
     # DEEP LINK
     # --------------------------------------------------------
 
     if len(text) > 1:
-
         try:
-
             ch_id = int(text[1])
 
             ch_data = channels_col.find_one(
-
                 {
                     "channel_id": ch_id
                 }
             )
 
-
             if not ch_data:
                 return
-
 
             # ------------------------------------------------
             # SAVE USER BASIC INFO
             # ------------------------------------------------
 
             existing_user = users_col.find_one(
-
                 {
                     "user_id": user_id,
-
                     "channel_id": ch_id
                 }
             )
 
-
             if existing_user:
-
                 users_col.update_one(
-
                     {
                         "_id": existing_user["_id"]
                     },
-
                     {
                         "$set": {
-
                             "name":
                                 message.from_user.first_name,
 
                             "username":
                                 message.from_user.username or ""
-
                         }
                     }
                 )
 
             else:
-
                 users_col.insert_one(
-
                     {
-
                         "user_id": user_id,
 
                         "channel_id": ch_id,
@@ -682,10 +562,8 @@ def start_handler(message):
 
                         "username":
                             message.from_user.username or ""
-
                     }
                 )
-
 
             # ------------------------------------------------
             # CHECK TIMEZONE
@@ -695,17 +573,12 @@ def start_handler(message):
                 user_id
             )
 
-
             if timezone is None:
-
                 users_col.update_one(
-
                     {
                         "user_id": user_id,
-
                         "channel_id": ch_id
                     },
-
                     {
                         "$set": {
                             "pending_channel_id": ch_id
@@ -719,51 +592,38 @@ def start_handler(message):
 
                 return
 
-
             # ------------------------------------------------
             # SHOW PLANS
             # ------------------------------------------------
 
             send_channel_plans(
-
                 message.chat.id,
-
                 ch_id
             )
 
             return
 
-
         except Exception:
-
             pass
-
 
     # --------------------------------------------------------
     # NORMAL USER START
     # --------------------------------------------------------
 
     if user_id != ADMIN_ID:
-
         timezone = get_user_timezone(
             user_id
         )
 
-
         if timezone is None:
-
             show_timezone_request(
                 message.chat.id
             )
 
         else:
-
             bot.send_message(
-
                 message.chat.id,
-
                 "Welcome!\n\n"
-
                 "To join a channel, please use the link "
                 "provided by the Admin."
             )
@@ -774,117 +634,82 @@ def start_handler(message):
 # ============================================================
 
 @bot.callback_query_handler(
-    func=lambda call: call.data.startswith("tz_")
-    and not call.data.startswith("tzpick_")
+    func=lambda call:
+        call.data.startswith("tz_")
+        and not call.data.startswith("tzpick_")
 )
 def timezone_country_callback(call):
-
     user_id = call.from_user.id
 
-
     try:
-
         if call.data == "tz_manual":
-
             profiles_col.update_one(
-
                 {
                     "user_id": user_id
                 },
-
                 {
                     "$set": {
-
                         "user_id": user_id,
-
                         "awaiting_country": True
-
                     }
                 },
-
                 upsert=True
             )
-
 
             bot.answer_callback_query(
                 call.id
             )
 
-
             bot.send_message(
-
                 call.message.chat.id,
-
                 "✍️ Please type your country name.\n\n"
                 "Example: India"
             )
 
             return
 
-
         index = int(
             call.data.split("_")[1]
         )
-
 
         country, timezone_name = COUNTRY_BUTTONS[
             index
         ]
 
-
         save_timezone(
-
             user_id,
-
             timezone_name,
-
             call.message.chat.id
         )
 
-
         bot.answer_callback_query(
-
             call.id,
-
             "✅ Timezone Saved!"
         )
 
-
         try:
-
             bot.delete_message(
-
                 call.message.chat.id,
-
                 call.message.message_id
             )
-
         except Exception:
-
             pass
 
-
     except Exception as e:
-
         bot.answer_callback_query(
-
             call.id,
-
             "❌ Timezone error!",
-
             show_alert=True
         )
 
-
-        bot.send_message(
-
-            ADMIN_ID,
-
-            f"❌ Timezone Error:\n"
-            f"`{e}`",
-
-            parse_mode="Markdown"
-        )
+        try:
+            bot.send_message(
+                ADMIN_ID,
+                f"❌ Timezone Error:\n`{e}`",
+                parse_mode="Markdown"
+            )
+        except Exception:
+            pass
 
 
 # ============================================================
@@ -892,118 +717,82 @@ def timezone_country_callback(call):
 # ============================================================
 
 @bot.callback_query_handler(
-    func=lambda call: call.data.startswith("tzpick_")
+    func=lambda call:
+        call.data.startswith("tzpick_")
 )
 def timezone_multi_callback(call):
-
     user_id = call.from_user.id
 
-
     try:
-
         index = int(
             call.data.split("_")[1]
         )
 
-
         profile = profiles_col.find_one(
-
             {
                 "user_id": user_id
             }
         )
 
-
         if not profile:
-
             bot.answer_callback_query(
-
                 call.id,
-
                 "❌ Please try again.",
-
                 show_alert=True
             )
 
             return
-
 
         choices = profile.get(
             "timezone_choices",
             []
         )
 
-
         if index < 0 or index >= len(choices):
-
             bot.answer_callback_query(
-
                 call.id,
-
                 "❌ Invalid timezone.",
-
                 show_alert=True
             )
 
             return
 
-
         timezone_name = choices[index]
 
-
         save_timezone(
-
             user_id,
-
             timezone_name,
-
             call.message.chat.id
         )
 
-
         bot.answer_callback_query(
-
             call.id,
-
             "✅ Timezone Saved!"
         )
 
-
         try:
-
             bot.delete_message(
-
                 call.message.chat.id,
-
                 call.message.message_id
             )
-
         except Exception:
-
             pass
 
-
     except Exception as e:
-
         bot.answer_callback_query(
-
             call.id,
-
             "❌ Timezone error!",
-
             show_alert=True
         )
 
-
-        bot.send_message(
-
-            ADMIN_ID,
-
-            f"❌ Timezone Error:\n"
-            f"`{e}`",
-
-            parse_mode="Markdown"
-        )
+        try:
+            bot.send_message(
+                ADMIN_ID,
+                f"❌ Timezone Error:\n`{e}`",
+                parse_mode="Markdown"
+            )
+        except Exception:
+            pass
 
 
 # ============================================================
@@ -1011,12 +800,9 @@ def timezone_multi_callback(call):
 # ============================================================
 
 def waiting_for_country(message):
-
     profile = profiles_col.find_one(
-
         {
             "user_id": message.from_user.id,
-
             "awaiting_country": True
         }
     )
@@ -1029,10 +815,8 @@ def waiting_for_country(message):
     func=waiting_for_country
 )
 def manual_country_handler(message):
-
     if (message.text or "").startswith("/"):
         return
-
 
     user_id = message.from_user.id
 
@@ -1040,94 +824,66 @@ def manual_country_handler(message):
         message.text or ""
     ).strip()
 
-
     zones = country_timezones(
         country_name
     )
 
-
     if not zones:
-
         bot.send_message(
-
             message.chat.id,
-
             "❌ Country not found.\n\n"
             "Please enter a valid country name."
         )
 
         return
 
-
     # --------------------------------------------------------
     # ONE TIMEZONE
     # --------------------------------------------------------
 
     if len(zones) == 1:
-
         timezone_name = zones[0]
 
-
         save_timezone(
-
             user_id,
-
             timezone_name,
-
             message.chat.id
         )
 
-
         bot.send_message(
-
             message.chat.id,
-
             "✅ Timezone Saved!"
         )
 
         return
-
 
     # --------------------------------------------------------
     # MULTIPLE TIMEZONES
     # --------------------------------------------------------
 
     profiles_col.update_one(
-
         {
             "user_id": user_id
         },
-
         {
             "$set": {
-
                 "timezone_choices": zones
-
             },
-
             "$unset": {
-
                 "awaiting_country": ""
-
             }
         },
-
         upsert=True
     )
-
 
     markup = timezone_choice_keyboard(
         zones
     )
 
-
     bot.send_message(
-
         message.chat.id,
-
         "🌍 This country has multiple timezones.\n\n"
         "Please select your timezone:",
-
         reply_markup=markup
     )
 
@@ -1138,7 +894,6 @@ def manual_country_handler(message):
 
 @bot.message_handler(commands=["timezone"])
 def timezone_command(message):
-
     show_timezone_request(
         message.chat.id
     )
@@ -1153,7 +908,6 @@ def timezone_command(message):
     func=lambda m: m.from_user.id == ADMIN_ID
 )
 def list_channels(message):
-
     markup = InlineKeyboardMarkup()
 
     cursor = channels_col.find(
@@ -1164,15 +918,10 @@ def list_channels(message):
 
     count = 0
 
-
     for ch in cursor:
-
         markup.add(
-
             InlineKeyboardButton(
-
                 f"Channel: {ch['name']}",
-
                 callback_data=(
                     f"manage_{ch['channel_id']}"
                 )
@@ -1181,38 +930,25 @@ def list_channels(message):
 
         count += 1
 
-
     markup.add(
-
         InlineKeyboardButton(
-
             "➕ Add New Channel",
-
             callback_data="add_new"
         )
     )
 
-
     if count == 0:
-
         bot.send_message(
-
             ADMIN_ID,
-
             "No channels found.\n\n"
             "Click below to add one.",
-
             reply_markup=markup
         )
 
     else:
-
         bot.send_message(
-
             ADMIN_ID,
-
             "Your Managed Channels:",
-
             reply_markup=markup
         )
 
@@ -1226,15 +962,11 @@ def list_channels(message):
     func=lambda m: m.from_user.id == ADMIN_ID
 )
 def add_channel_start(message):
-
     msg = bot.send_message(
-
         ADMIN_ID,
-
         "Please ensure the bot is an Admin in your channel,\n"
         "then FORWARD any message from that channel here."
     )
-
 
     bot.register_next_step_handler(
         msg,
@@ -1247,34 +979,27 @@ def add_channel_start(message):
 # ============================================================
 
 @bot.callback_query_handler(
-    func=lambda call: call.data == "add_new"
+    func=lambda call:
+        call.data == "add_new"
 )
 def cb_add_new(call):
-
     if call.from_user.id != ADMIN_ID:
-
         bot.answer_callback_query(
-
             call.id,
-
             "⛔ Only Owner can add channels!",
-
             show_alert=True
         )
 
         return
 
-
-    bot.answer_callback_query(call.id)
-
-
-    msg = bot.send_message(
-
-        ADMIN_ID,
-
-        "Please FORWARD any message from your channel here."
+    bot.answer_callback_query(
+        call.id
     )
 
+    msg = bot.send_message(
+        ADMIN_ID,
+        "Please FORWARD any message from your channel here."
+    )
 
     bot.register_next_step_handler(
         msg,
@@ -1287,60 +1012,41 @@ def cb_add_new(call):
 # ============================================================
 
 def get_plans(message):
-
     if message.from_user.id != ADMIN_ID:
         return
 
-
     if message.forward_from_chat:
-
         ch_id = message.forward_from_chat.id
 
         ch_name = message.forward_from_chat.title
 
-
         msg = bot.send_message(
-
             ADMIN_ID,
-
             f"Channel Detected: *{ch_name}*\n\n"
-
             "Enter plans in format:\n"
             "`Minutes:Price, Minutes:Price`\n\n"
-
             "Example:\n"
             "`1:10, 1440:99, 10080:199, "
             "43200:399, 129600:799`\n\n"
-
             "This means:\n"
             "1 Minute\n"
             "1 Day\n"
             "7 Days\n"
             "30 Days\n"
             "90 Days",
-
             parse_mode="Markdown"
         )
 
-
         bot.register_next_step_handler(
-
             msg,
-
             finalize_channel,
-
             ch_id,
-
             ch_name
         )
 
-
     else:
-
         bot.send_message(
-
             ADMIN_ID,
-
             "❌ Error: Message was not forwarded.\n\n"
             "Use /add to try again."
         )
@@ -1355,79 +1061,61 @@ def finalize_channel(
     ch_id,
     ch_name
 ):
-
     if message.from_user.id != ADMIN_ID:
         return
 
-
     try:
-
         raw_plans = message.text.split(",")
 
         plans_dict = {}
 
-
         for p in raw_plans:
-
             t, pr = p.strip().split(":")
 
-            t = str(int(t.strip()))
+            t = str(
+                int(t.strip())
+            )
 
             pr = pr.strip()
 
             plans_dict[t] = pr
 
+        if not plans_dict:
+            raise ValueError("No plans found.")
 
         channels_col.update_one(
-
             {
                 "channel_id": ch_id
             },
-
             {
                 "$set": {
-
                     "name": ch_name,
 
                     "plans": plans_dict,
 
                     "admin_id": ADMIN_ID
-
                 }
             },
-
             upsert=True
         )
 
-
         bot_username = bot.get_me().username
 
-
         bot.send_message(
-
             ADMIN_ID,
-
             f"✅ *Setup Successful!*\n\n"
-
             f"Invite Link for users:\n"
             f"`https://t.me/{bot_username}?start={ch_id}`",
-
             parse_mode="Markdown"
         )
 
-
     except Exception:
-
         bot.send_message(
-
             ADMIN_ID,
-
             "❌ Invalid format.\n\n"
-
             "Use:\n"
             "`1:10, 1440:99, 10080:199, "
             "43200:399, 129600:799`",
-
             parse_mode="Markdown"
         )
 
@@ -1437,132 +1125,115 @@ def finalize_channel(
 # ============================================================
 
 @bot.callback_query_handler(
-    func=lambda call: call.data.startswith("select_")
+    func=lambda call:
+        call.data.startswith("select_")
 )
 def user_pays(call):
-
     try:
-
         _, ch_id, mins = call.data.split("_")
 
         ch_id = int(ch_id)
 
         mins = int(mins)
 
-
         ch_data = channels_col.find_one(
-
             {
                 "channel_id": ch_id
             }
         )
 
-
         if not ch_data:
+            bot.answer_callback_query(
+                call.id,
+                "❌ Channel not found!",
+                show_alert=True
+            )
+
             return
 
-
-        price = ch_data["plans"][str(mins)]
-
-        plan_name = format_plan(mins)
-
-
-        qr_url = (
-
-            "https://api.qrserver.com/v1/create-qr-code/"
-
-            "?size=300x300&data="
-
-            f"upi://pay?pa={UPI_ID}"
-
-            f"%26am={price}"
-
-            "%26cu=INR"
-
+        plans = ch_data.get(
+            "plans",
+            {}
         )
 
+        if str(mins) not in plans:
+            bot.answer_callback_query(
+                call.id,
+                "❌ Plan not found!",
+                show_alert=True
+            )
+
+            return
+
+        price = plans[str(mins)]
+
+        plan_name = format_plan(
+            mins
+        )
+
+        qr_url = (
+            "https://api.qrserver.com/v1/create-qr-code/"
+            "?size=300x300&data="
+            f"upi://pay?pa={UPI_ID}"
+            f"%26am={price}"
+            "%26cu=INR"
+        )
 
         markup = InlineKeyboardMarkup()
 
-
         markup.add(
-
             InlineKeyboardButton(
-
                 "✅ I Have Paid",
-
                 callback_data=(
                     f"paid_{ch_id}_{mins}"
                 )
             )
         )
 
-
         contact_url = get_contact_url()
 
-
         if contact_url:
-
             markup.add(
-
                 InlineKeyboardButton(
-
                     "📞 Contact Admin",
-
                     url=contact_url
                 )
             )
 
-
         bot.send_photo(
-
             call.message.chat.id,
-
             qr_url,
-
             caption=(
-
                 f"📦 Plan: *{plan_name}*\n"
                 f"💰 Price: ₹{price}\n\n"
-
                 f"UPI ID: `{UPI_ID}`\n\n"
-
                 "Please complete the payment and click "
                 "*I Have Paid*.\n\n"
-
                 f"Admin: {get_contact_username()}"
-
             ),
-
             reply_markup=markup,
-
             parse_mode="Markdown"
         )
 
-
-        bot.answer_callback_query(call.id)
-
+        bot.answer_callback_query(
+            call.id
+        )
 
     except Exception as e:
-
         bot.answer_callback_query(
-
             call.id,
-
             "❌ Something went wrong!",
-
             show_alert=True
         )
 
-
-        bot.send_message(
-
-            ADMIN_ID,
-
-            f"❌ Payment Flow Error:\n`{e}`",
-
-            parse_mode="Markdown"
-        )
+        try:
+            bot.send_message(
+                ADMIN_ID,
+                f"❌ Payment Flow Error:\n`{e}`",
+                parse_mode="Markdown"
+            )
+        except Exception:
+            pass
 
 
 # ============================================================
@@ -1570,50 +1241,62 @@ def user_pays(call):
 # ============================================================
 
 @bot.callback_query_handler(
-    func=lambda call: call.data.startswith("paid_")
+    func=lambda call:
+        call.data.startswith("paid_")
 )
 def admin_notify(call):
-
     try:
-
         _, ch_id, mins = call.data.split("_")
 
         ch_id = int(ch_id)
 
         mins = int(mins)
 
-
         user = call.from_user
 
-
         ch_data = channels_col.find_one(
-
             {
                 "channel_id": ch_id
             }
         )
 
-
         if not ch_data:
+            bot.answer_callback_query(
+                call.id,
+                "❌ Channel not found!",
+                show_alert=True
+            )
+
             return
 
+        plans = ch_data.get(
+            "plans",
+            {}
+        )
 
-        price = ch_data["plans"][str(mins)]
+        if str(mins) not in plans:
+            bot.answer_callback_query(
+                call.id,
+                "❌ Plan not found!",
+                show_alert=True
+            )
 
-        plan_name = format_plan(mins)
+            return
 
+        price = plans[str(mins)]
+
+        plan_name = format_plan(
+            mins
+        )
 
         users_col.update_one(
-
             {
                 "user_id": user.id,
 
                 "channel_id": ch_id
             },
-
             {
                 "$set": {
-
                     "user_id": user.id,
 
                     "channel_id": ch_id,
@@ -1628,11 +1311,9 @@ def admin_notify(call):
 
                     "requested_at":
                         time.time()
-
                 },
 
                 "$unset": {
-
                     "joined_at": "",
 
                     "expiry": "",
@@ -1640,118 +1321,83 @@ def admin_notify(call):
                     "invite_link": "",
 
                     "invite_link_expires_at": ""
-
                 }
             },
 
             upsert=True
         )
 
-
         markup = InlineKeyboardMarkup()
 
-
         markup.add(
-
             InlineKeyboardButton(
-
                 "✅ Approve",
-
                 callback_data=(
-
                     f"app_{user.id}_"
                     f"{ch_id}_{mins}"
                 )
             ),
 
             InlineKeyboardButton(
-
                 "❌ Reject",
-
                 callback_data=(
                     f"rej_{user.id}_{ch_id}"
                 )
             )
         )
 
-
         bot.send_message(
-
             ADMIN_ID,
-
             f"🔔 *Payment Verification Required!*\n\n"
-
             f"👤 User: {user.first_name}\n"
             f"🆔 User ID: `{user.id}`\n"
             f"📢 Channel: {ch_data['name']}\n"
             f"📦 Plan: {plan_name}\n"
             f"💰 Price: ₹{price}",
-
             reply_markup=markup,
-
             parse_mode="Markdown"
         )
 
-
         u_markup = InlineKeyboardMarkup()
-
 
         contact_url = get_contact_url()
 
-
         if contact_url:
-
             u_markup.add(
-
                 InlineKeyboardButton(
-
                     "📞 Contact Admin",
-
                     url=contact_url
                 )
             )
 
-
         bot.send_message(
-
             call.message.chat.id,
-
             "✅ Your payment request has been sent.\n\n"
             "Please wait for Admin approval.\n\n"
             f"Admin: {get_contact_username()}",
-
             reply_markup=u_markup
         )
 
-
         bot.answer_callback_query(
-
             call.id,
-
             "✅ Request sent!"
         )
 
-
     except Exception as e:
-
         bot.answer_callback_query(
-
             call.id,
-
             "❌ Error!",
-
             show_alert=True
         )
 
-
-        bot.send_message(
-
-            ADMIN_ID,
-
-            f"❌ Payment Request Error:\n`{e}`",
-
-            parse_mode="Markdown"
-        )
+        try:
+            bot.send_message(
+                ADMIN_ID,
+                f"❌ Payment Request Error:\n`{e}`",
+                parse_mode="Markdown"
+            )
+        except Exception:
+            pass
 
 
 # ============================================================
@@ -1759,26 +1405,20 @@ def admin_notify(call):
 # ============================================================
 
 @bot.callback_query_handler(
-    func=lambda call: call.data.startswith("app_")
+    func=lambda call:
+        call.data.startswith("app_")
 )
 def approve_now(call):
-
     if call.from_user.id != ADMIN_ID:
-
         bot.answer_callback_query(
-
             call.id,
-
             "⛔ Only Owner can approve payments!",
-
             show_alert=True
         )
 
         return
 
-
     try:
-
         _, u_id, ch_id, mins = call.data.split("_")
 
         u_id = int(u_id)
@@ -1787,58 +1427,48 @@ def approve_now(call):
 
         mins = int(mins)
 
-
         subscription = users_col.find_one(
-
             {
                 "user_id": u_id,
 
-                "channel_id": ch_id
+                "channel_id": ch_id,
+
+                "status": "payment_pending"
             }
         )
 
-
         if not subscription:
-
             bot.answer_callback_query(
-
                 call.id,
-
                 "❌ User request not found!",
-
                 show_alert=True
             )
 
             return
 
-
-        plan_name = format_plan(mins)
-
+        plan_name = format_plan(
+            mins
+        )
 
         # ----------------------------------------------------
         # WAITING STATE
         # ----------------------------------------------------
 
         users_col.update_one(
-
             {
                 "_id": subscription["_id"]
             },
-
             {
                 "$set": {
-
                     "plan_minutes": mins,
 
                     "status": "waiting",
 
                     "approved_at":
                         time.time()
-
                 },
 
                 "$unset": {
-
                     "joined_at": "",
 
                     "expiry": "",
@@ -1846,11 +1476,9 @@ def approve_now(call):
                     "invite_link": "",
 
                     "invite_link_expires_at": ""
-
                 }
             }
         )
-
 
         # ----------------------------------------------------
         # TEMPORARY ONE-PERSON INVITE LINK
@@ -1865,107 +1493,74 @@ def approve_now(call):
             + (mins * 60)
         )
 
-
         invite_expiry_datetime = datetime.fromtimestamp(
             invite_expiry_timestamp,
             ZoneInfo("UTC")
         )
 
-
         link = bot.create_chat_invite_link(
-
             ch_id,
-
             member_limit=1,
-
             expire_date=invite_expiry_datetime
         )
 
-
         users_col.update_one(
-
             {
                 "_id": subscription["_id"]
             },
-
             {
                 "$set": {
-
                     "invite_link":
                         link.invite_link,
 
                     "invite_link_expires_at":
                         invite_expiry_timestamp
-
                 }
             }
         )
 
-
         bot.send_message(
-
             u_id,
-
             f"🥳 *Payment Approved!*\n\n"
-
             f"📦 Subscription: *{plan_name}*\n\n"
-
             f"🔗 Join Channel:\n"
             f"{link.invite_link}\n\n"
-
             "⚠️ Your subscription timer will start "
             "*when you join the channel*.",
-
             parse_mode="Markdown"
         )
-
 
         bot.edit_message_text(
-
             f"✅ *Payment Approved!*\n\n"
-
             f"👤 User ID: `{u_id}`\n"
             f"📦 Plan: `{plan_name}`\n\n"
-
             "⏳ Waiting for user to join...\n"
             "Timer has NOT started yet.",
-
             call.message.chat.id,
-
             call.message.message_id,
-
             parse_mode="Markdown"
         )
 
-
         bot.answer_callback_query(
-
             call.id,
-
             "✅ Payment approved!"
         )
 
-
     except Exception as e:
-
         bot.answer_callback_query(
-
             call.id,
-
             "❌ Approval error!",
-
             show_alert=True
         )
 
-
-        bot.send_message(
-
-            ADMIN_ID,
-
-            f"❌ Approval Error:\n`{e}`",
-
-            parse_mode="Markdown"
-        )
+        try:
+            bot.send_message(
+                ADMIN_ID,
+                f"❌ Approval Error:\n`{e}`",
+                parse_mode="Markdown"
+            )
+        except Exception:
+            pass
 
 
 # ============================================================
@@ -1973,35 +1568,27 @@ def approve_now(call):
 # ============================================================
 
 @bot.callback_query_handler(
-    func=lambda call: call.data.startswith("rej_")
+    func=lambda call:
+        call.data.startswith("rej_")
 )
 def reject_payment(call):
-
     if call.from_user.id != ADMIN_ID:
-
         bot.answer_callback_query(
-
             call.id,
-
             "⛔ Only Owner can reject payments!",
-
             show_alert=True
         )
 
         return
 
-
     try:
-
         _, u_id, ch_id = call.data.split("_")
 
         u_id = int(u_id)
 
         ch_id = int(ch_id)
 
-
         users_col.delete_one(
-
             {
                 "user_id": u_id,
 
@@ -2011,76 +1598,50 @@ def reject_payment(call):
             }
         )
 
-
         bot.answer_callback_query(
-
             call.id,
-
             "❌ Payment rejected!"
         )
 
-
         bot.send_message(
-
             u_id,
-
             "❌ *Payment Request Rejected!*\n\n"
-
             "Please complete the payment and then "
             "click *I Have Paid*.",
-
             parse_mode="Markdown"
         )
-
 
         bot.send_message(
-
             ADMIN_ID,
-
             f"❌ *Request Rejected!*\n\n"
-
             f"User ID: `{u_id}`\n\n"
-
             "The user has been notified.",
-
             parse_mode="Markdown"
         )
-
 
         bot.edit_message_text(
-
             f"❌ *Payment Rejected!*\n\n"
-
             f"User ID: `{u_id}`",
-
             call.message.chat.id,
-
             call.message.message_id,
-
             parse_mode="Markdown"
         )
 
-
     except Exception as e:
-
         bot.answer_callback_query(
-
             call.id,
-
             "❌ Rejection error!",
-
             show_alert=True
         )
 
-
-        bot.send_message(
-
-            ADMIN_ID,
-
-            f"❌ Rejection Error:\n`{e}`",
-
-            parse_mode="Markdown"
-        )
+        try:
+            bot.send_message(
+                ADMIN_ID,
+                f"❌ Rejection Error:\n`{e}`",
+                parse_mode="Markdown"
+            )
+        except Exception:
+            pass
 
 
 # ============================================================
@@ -2089,9 +1650,7 @@ def reject_payment(call):
 
 @bot.chat_member_handler()
 def track_channel_join(update):
-
     try:
-
         new_status = update.new_chat_member.status
 
         old_status = update.old_chat_member.status
@@ -2100,34 +1659,21 @@ def track_channel_join(update):
 
         ch_id = update.chat.id
 
-
         joined_statuses = [
-
             "member",
-
             "administrator"
-
         ]
 
-
         if (
-
             new_status in joined_statuses
-
             and old_status in joined_statuses
-
         ):
-
             return
-
 
         if new_status not in joined_statuses:
-
             return
 
-
         subscription = users_col.find_one(
-
             {
                 "user_id": user.id,
 
@@ -2137,11 +1683,8 @@ def track_channel_join(update):
             }
         )
 
-
         if not subscription:
-
             return
-
 
         # ----------------------------------------------------
         # TIMER STARTS HERE
@@ -2153,24 +1696,17 @@ def track_channel_join(update):
             subscription["plan_minutes"]
         )
 
-
         expiry_timestamp = (
-
             joined_timestamp
-
             + (plan_minutes * 60)
         )
 
-
         users_col.update_one(
-
             {
                 "_id": subscription["_id"]
             },
-
             {
                 "$set": {
-
                     "joined_at":
                         joined_timestamp,
 
@@ -2185,16 +1721,13 @@ def track_channel_join(update):
 
                     "username":
                         user.username or ""
-
                 }
             }
         )
 
-
         plan_name = format_plan(
             plan_minutes
         )
-
 
         # ----------------------------------------------------
         # ADMIN TIME = IST
@@ -2208,7 +1741,6 @@ def track_channel_join(update):
             expiry_timestamp
         )
 
-
         # ----------------------------------------------------
         # USER TIMEZONE
         # ----------------------------------------------------
@@ -2217,109 +1749,71 @@ def track_channel_join(update):
             user.id
         )
 
-
         if user_timezone is None:
-
             user_timezone = IST
 
-
         user_joined_text = format_user_time(
-
             joined_timestamp,
-
             user_timezone
         )
 
         user_expiry_text = format_user_time(
-
             expiry_timestamp,
-
             user_timezone
         )
-
 
         # ----------------------------------------------------
         # OWNER NOTIFICATION
         # ----------------------------------------------------
 
         bot.send_message(
-
             ADMIN_ID,
-
             f"👤 *User Joined!*\n\n"
-
             f"User: {user.first_name}\n"
             f"User ID: `{user.id}`\n"
             f"Channel ID: `{ch_id}`\n\n"
-
             f"📥 Joined:\n"
             f"{admin_joined_text} IST\n\n"
-
             f"📦 Subscription:\n"
             f"{plan_name}\n\n"
-
             f"🔴 Expires:\n"
             f"{admin_expiry_text} IST",
-
             parse_mode="Markdown"
         )
-
 
         # ----------------------------------------------------
         # USER NOTIFICATION
         # ----------------------------------------------------
 
         timezone_name = str(
-
             getattr(
-
                 user_timezone,
-
                 "key",
-
                 "Asia/Kolkata"
-
             )
         )
 
-
         bot.send_message(
-
             user.id,
-
             f"✅ *Subscription Started!*\n\n"
-
-            f"Your subscription has started now.\n\n"
-
+            "Your subscription has started now.\n\n"
             f"📦 Duration: *{plan_name}*\n\n"
-
             f"📥 Joined:\n"
             f"{user_joined_text}\n\n"
-
             f"🔴 Expires at:\n"
             f"{user_expiry_text}\n\n"
-
             f"🌍 Timezone: `{timezone_name}`",
-
             parse_mode="Markdown"
         )
 
-
     except Exception as e:
-
         try:
-
             bot.send_message(
-
                 ADMIN_ID,
-
                 f"❌ Join Tracking Error:\n`{e}`",
-
                 parse_mode="Markdown"
             )
-
         except Exception:
-
             pass
 
 
@@ -2332,233 +1826,186 @@ def track_channel_join(update):
     func=lambda m: m.from_user.id == ADMIN_ID
 )
 def show_users(message):
-
-    users = list(
-
-        users_col.find(
-
-            {
-                "channel_id": {
-                    "$exists": True
+    try:
+        users = list(
+            users_col.find(
+                {
+                    "channel_id": {
+                        "$exists": True
+                    }
                 }
-            }
-        )
-    )
-
-
-    if not users:
-
-        bot.send_message(
-
-            ADMIN_ID,
-
-            "👥 *Subscribers*\n\n"
-            "No users found.",
-
-            parse_mode="Markdown"
-        )
-
-        return
-
-
-    text = "👥 *SUBSCRIBERS*\n\n"
-
-    now = time.time()
-
-    index = 0
-
-
-    for user in users:
-
-        status = user.get(
-            "status",
-            "unknown"
-        )
-
-
-        if status == "payment_pending":
-
-            continue
-
-
-        index += 1
-
-
-        user_id = user.get(
-            "user_id",
-            "Unknown"
-        )
-
-        channel_id = user.get(
-            "channel_id",
-            "Unknown"
-        )
-
-        name = html.escape(
-
-            str(
-                user.get(
-                    "name",
-                    "Unknown"
-                )
             )
         )
 
+        text = "👥 *SUBSCRIBERS*\n\n"
 
-        # ----------------------------------------------------
-        # WAITING
-        # ----------------------------------------------------
+        now = time.time()
 
-        if status == "waiting":
+        index = 0
+
+        for user in users:
+            status = user.get(
+                "status",
+                "unknown"
+            )
+
+            if status == "payment_pending":
+                continue
+
+            index += 1
+
+            user_id = user.get(
+                "user_id",
+                "Unknown"
+            )
+
+            channel_id = user.get(
+                "channel_id",
+                "Unknown"
+            )
+
+            name = html.escape(
+                str(
+                    user.get(
+                        "name",
+                        "Unknown"
+                    )
+                )
+            )
+
+            # ------------------------------------------------
+            # WAITING
+            # ------------------------------------------------
+
+            if status == "waiting":
+                text += (
+                    f"{index}. 👤 <b>{name}</b>\n"
+                    f"🆔 ID: <code>{user_id}</code>\n"
+                    f"📢 Channel: <code>{channel_id}</code>\n"
+                    f"🟡 Status: Waiting to join\n"
+                    f"⏳ Timer: Not started yet\n\n"
+                )
+
+                continue
+
+            # ------------------------------------------------
+            # ACTIVE
+            # ------------------------------------------------
+
+            if status == "active":
+                joined_ts = user.get(
+                    "joined_at"
+                )
+
+                expiry_ts = user.get(
+                    "expiry"
+                )
+
+                joined_text = format_ist_time(
+                    joined_ts
+                )
+
+                expiry_text = format_ist_time(
+                    expiry_ts
+                )
+
+                if expiry_ts:
+                    remaining_seconds = int(
+                        expiry_ts - now
+                    )
+
+                    remaining = format_remaining(
+                        remaining_seconds
+                    )
+
+                else:
+                    remaining = "Unknown"
+
+                text += (
+                    f"{index}. 👤 <b>{name}</b>\n"
+                    f"🆔 ID: <code>{user_id}</code>\n"
+                    f"📢 Channel: <code>{channel_id}</code>\n"
+                    f"🟢 Status: Active\n"
+                    f"📥 Joined: {joined_text} IST\n"
+                    f"🔴 Expires: {expiry_text} IST\n"
+                    f"⏳ Remaining: {remaining}\n\n"
+                )
+
+                continue
+
+            # ------------------------------------------------
+            # OTHER
+            # ------------------------------------------------
 
             text += (
-
                 f"{index}. 👤 <b>{name}</b>\n"
-
                 f"🆔 ID: <code>{user_id}</code>\n"
-
                 f"📢 Channel: <code>{channel_id}</code>\n"
-
-                f"🟡 Status: Waiting to join\n"
-
-                f"⏳ Timer: Not started yet\n\n"
-
+                f"Status: "
+                f"<code>{html.escape(str(status))}</code>\n\n"
             )
 
-            continue
+        if index == 0:
+            bot.send_message(
+                ADMIN_ID,
+                "👥 *Subscribers*\n\n"
+                "No active/waiting subscribers.",
+                parse_mode="Markdown"
+            )
 
+            return
 
         # ----------------------------------------------------
-        # ACTIVE
+        # SAFE MESSAGE SPLITTING
         # ----------------------------------------------------
 
-        if status == "active":
+        chunks = []
 
-            joined_ts = user.get(
-                "joined_at"
-            )
+        current_chunk = ""
 
-            expiry_ts = user.get(
-                "expiry"
-            )
+        for block in text.split("\n\n"):
+            block += "\n\n"
 
+            if (
+                len(current_chunk) + len(block)
+                > 3900
+            ):
+                if current_chunk:
+                    chunks.append(
+                        current_chunk
+                    )
 
-            joined_text = format_ist_time(
-                joined_ts
-            )
-
-            expiry_text = format_ist_time(
-                expiry_ts
-            )
-
-
-            if expiry_ts:
-
-                remaining_seconds = int(
-
-                    expiry_ts - now
-
-                )
-
-                remaining = format_remaining(
-
-                    remaining_seconds
-
-                )
+                current_chunk = block
 
             else:
+                current_chunk += block
 
-                remaining = "Unknown"
-
-
-            text += (
-
-                f"{index}. 👤 <b>{name}</b>\n"
-
-                f"🆔 ID: <code>{user_id}</code>\n"
-
-                f"📢 Channel: <code>{channel_id}</code>\n"
-
-                f"🟢 Status: Active\n"
-
-                f"📥 Joined: {joined_text} IST\n"
-
-                f"🔴 Expires: {expiry_text} IST\n"
-
-                f"⏳ Remaining: {remaining}\n\n"
-
+        if current_chunk:
+            chunks.append(
+                current_chunk
             )
 
-            continue
-
-
-        # ----------------------------------------------------
-        # OTHER
-        # ----------------------------------------------------
-
-        text += (
-
-            f"{index}. 👤 <b>{name}</b>\n"
-
-            f"🆔 ID: <code>{user_id}</code>\n"
-
-            f"📢 Channel: <code>{channel_id}</code>\n"
-
-            f"Status: <code>{html.escape(str(status))}</code>\n\n"
-
-        )
-
-
-    if index == 0:
-
-        bot.send_message(
-
-            ADMIN_ID,
-
-            "👥 *Subscribers*\n\n"
-            "No active/waiting subscribers.",
-
-            parse_mode="Markdown"
-        )
-
-        return
-
-
-    # --------------------------------------------------------
-    # TELEGRAM MESSAGE LIMIT
-    # --------------------------------------------------------
-
-    if len(text) <= 4000:
-
-        bot.send_message(
-
-            ADMIN_ID,
-
-            text,
-
-            parse_mode="HTML"
-        )
-
-    else:
-
-        for i in range(
-
-            0,
-
-            len(text),
-
-            4000
-
-        ):
-
+        for chunk in chunks:
             bot.send_message(
-
                 ADMIN_ID,
-
-                text[i:i + 4000],
-
+                chunk,
                 parse_mode="HTML"
             )
+
+    except Exception as e:
+        print(
+            "Users command error:",
+            e
+        )
+
+        try:
+            bot.send_message(
+                ADMIN_ID,
+                "❌ Unable to load subscribers.\n\n"
+                "Please try /users again."
+            )
+        except Exception:
+            pass
 
 
 # ============================================================
@@ -2566,96 +2013,67 @@ def show_users(message):
 # ============================================================
 
 @bot.callback_query_handler(
-    func=lambda call: call.data.startswith("manage_")
+    func=lambda call:
+        call.data.startswith("manage_")
 )
 def manage_ch(call):
-
     if call.from_user.id != ADMIN_ID:
-
         bot.answer_callback_query(
-
             call.id,
-
             "⛔ Only Owner can manage channels!",
-
             show_alert=True
         )
 
         return
 
-
     try:
-
         ch_id = int(
             call.data.split("_")[1]
         )
 
-
         ch_data = channels_col.find_one(
-
             {
                 "channel_id": ch_id
             }
         )
 
-
         if not ch_data:
-
             bot.answer_callback_query(
-
                 call.id,
-
                 "❌ Channel not found!",
-
                 show_alert=True
             )
 
             return
 
-
         bot_username = bot.get_me().username
 
         link = (
-
             f"https://t.me/"
-
             f"{bot_username}"
-
             f"?start={ch_id}"
-
         )
 
-
         bot.edit_message_text(
-
             f"⚙️ Settings for: "
             f"*{ch_data['name']}*\n\n"
-
             f"Your Link:\n"
             f"`{link}`\n\n"
-
             "To edit prices, use /add and "
             "forward a message from this channel again.",
-
             call.message.chat.id,
-
             call.message.message_id,
-
             parse_mode="Markdown"
         )
 
-
-        bot.answer_callback_query(call.id)
-
+        bot.answer_callback_query(
+            call.id
+        )
 
     except Exception:
-
         bot.answer_callback_query(
-
             call.id,
-
             "❌ Error!",
-
             show_alert=True
         )
 
@@ -2665,12 +2083,9 @@ def manage_ch(call):
 # ============================================================
 
 def kick_expired_users():
-
     now = time.time()
 
-
     expired_users = users_col.find(
-
         {
             "status": "active",
 
@@ -2680,39 +2095,30 @@ def kick_expired_users():
         }
     )
 
-
-    bot_username = bot.get_me().username
-
+    try:
+        bot_username = bot.get_me().username
+    except Exception:
+        bot_username = ""
 
     for user in expired_users:
-
         try:
-
             user_id = user["user_id"]
 
             channel_id = user["channel_id"]
 
-
             # ------------------------------------------------
             # REVOKE CHANNEL ACCESS
             #
-            # IMPORTANT:
-            # Do NOT ban + unban.
-            #
-            # This avoids keeping the user in Telegram's
-            # "Removed Users" list.
+            # We restrict the expired member instead of using
+            # ban + unban, so we don't intentionally place them
+            # into Telegram's Removed Users list.
             # ------------------------------------------------
 
             try:
-
                 bot.restrict_chat_member(
-
                     channel_id,
-
                     user_id,
-
                     permissions=telebot.types.ChatPermissions(
-
                         can_send_messages=False,
 
                         can_send_audios=False,
@@ -2732,102 +2138,62 @@ def kick_expired_users():
                         can_send_other_messages=False,
 
                         can_add_web_page_previews=False
-
                     )
                 )
 
             except Exception:
-
                 pass
 
-
             # ------------------------------------------------
-            # USER RENEW LINK
-            #
-            # This is the permanent BOT deep link.
-            # It is NOT the channel invite link.
+            # PERMANENT BOT RENEW LINK
             # ------------------------------------------------
 
             rejoin_url = (
-
                 f"https://t.me/"
-
                 f"{bot_username}"
-
                 f"?start={channel_id}"
-
             )
-
 
             markup = InlineKeyboardMarkup()
 
-
             markup.add(
-
                 InlineKeyboardButton(
-
                     "🔄 Re-join / Renew",
-
                     url=rejoin_url
-
                 )
-
             )
-
 
             # ------------------------------------------------
             # USER MESSAGE
             # ------------------------------------------------
 
             bot.send_message(
-
                 user_id,
-
                 "⏰ *Subscription Expired!*\n\n"
-
                 "Your premium subscription has expired.\n\n"
-
                 "Click below to renew:",
-
                 reply_markup=markup,
-
                 parse_mode="Markdown"
-
             )
-
 
             # ------------------------------------------------
             # DELETE OLD SUBSCRIPTION
-            #
-            # This allows the user to start a fresh
-            # subscription from the permanent bot link.
             # ------------------------------------------------
 
             users_col.delete_one(
-
                 {
                     "_id": user["_id"]
                 }
-
             )
 
-
         except Exception as e:
-
             try:
-
                 bot.send_message(
-
                     ADMIN_ID,
-
                     f"❌ Expiry Error:\n`{e}`",
-
                     parse_mode="Markdown"
-
                 )
-
             except Exception:
-
                 pass
 
 
@@ -2836,369 +2202,28 @@ def kick_expired_users():
 # ============================================================
 
 if __name__ == "__main__":
-
     keep_alive()
-
 
     scheduler = BackgroundScheduler()
 
-
     scheduler.add_job(
-
         kick_expired_users,
-
         "interval",
-
-        minutes=1
-
-    )
-
-
-    scheduler.start()
-
-
-    bot.remove_webhook()
-
-
-    print("Bot is running...")
-
-
-    bot.infinity_polling(
-
-        timeout=20,
-
-        long_polling_timeout=10,
-
-        allowed_updates=[
-
-            "message",
-
-            "callback_query",
-
-            "chat_member"
-
-        ]
-
-    )
-        # SAFE MESSAGE SPLITTING
-        # ----------------------------------------------------
-
-        chunks = []
-
-        current_chunk = ""
-
-        for block in text.split("\n\n"):
-
-            block += "\n\n"
-
-            if len(current_chunk) + len(block) > 3900:
-
-                if current_chunk:
-                    chunks.append(
-                        current_chunk
-                    )
-
-                current_chunk = block
-
-            else:
-
-                current_chunk += block
-
-
-        if current_chunk:
-            chunks.append(
-                current_chunk
-            )
-
-
-        for chunk in chunks:
-
-            bot.send_message(
-
-                ADMIN_ID,
-
-                chunk,
-
-                parse_mode="Markdown"
-            )
-
-
-    except Exception as e:
-
-        print(
-            "Users command error:",
-            e
-        )
-
-        bot.send_message(
-
-            ADMIN_ID,
-
-            "❌ Unable to load subscribers.\n\n"
-            "Please try /users again."
-        )
-
-
-# ============================================================
-# MANAGE CHANNEL
-# ============================================================
-
-@bot.callback_query_handler(
-    func=lambda call: call.data.startswith("manage_")
-)
-def manage_ch(call):
-
-    if call.from_user.id != ADMIN_ID:
-
-        bot.answer_callback_query(
-
-            call.id,
-
-            "⛔ Only Owner can manage channels!",
-
-            show_alert=True
-        )
-
-        return
-
-
-    try:
-
-        ch_id = int(
-            call.data.split("_")[1]
-        )
-
-
-        ch_data = channels_col.find_one(
-
-            {
-                "channel_id": ch_id
-            }
-        )
-
-
-        if not ch_data:
-
-            bot.answer_callback_query(
-
-                call.id,
-
-                "❌ Channel not found!",
-
-                show_alert=True
-            )
-
-            return
-
-
-        bot_username = bot.get_me().username
-
-        link = (
-
-            f"https://t.me/"
-            f"{bot_username}"
-            f"?start={ch_id}"
-        )
-
-
-        bot.edit_message_text(
-
-            f"⚙️ Settings for: "
-            f"*{ch_data['name']}*\n\n"
-
-            f"Your Link:\n"
-            f"`{link}`\n\n"
-
-            "To edit prices, use /add and "
-            "forward a message from this channel again.",
-
-            call.message.chat.id,
-
-            call.message.message_id,
-
-            parse_mode="Markdown"
-        )
-
-
-        bot.answer_callback_query(call.id)
-
-
-    except Exception:
-
-        bot.answer_callback_query(
-
-            call.id,
-
-            "❌ Error!",
-
-            show_alert=True
-        )
-
-
-# ============================================================
-# AUTOMATICALLY KICK EXPIRED USERS
-# ============================================================
-
-def kick_expired_users():
-
-    now = datetime.now().timestamp()
-
-
-    expired_users = users_col.find(
-
-        {
-            "status": "active",
-
-            "expiry": {
-                "$lte": now
-            }
-        }
-    )
-
-
-    bot_username = bot.get_me().username
-
-
-    for user in expired_users:
-
-        try:
-
-            user_id = user["user_id"]
-
-            channel_id = user["channel_id"]
-
-
-            # ------------------------------------------------
-            # REMOVE USER
-            # ------------------------------------------------
-
-            bot.ban_chat_member(
-
-                channel_id,
-
-                user_id
-            )
-
-
-            bot.unban_chat_member(
-
-                channel_id,
-
-                user_id
-            )
-
-
-            # ------------------------------------------------
-            # RENEW LINK
-            # ------------------------------------------------
-
-            rejoin_url = (
-
-                f"https://t.me/"
-                f"{bot_username}"
-                f"?start={channel_id}"
-            )
-
-
-            markup = InlineKeyboardMarkup()
-
-
-            markup.add(
-
-                InlineKeyboardButton(
-
-                    "🔄 Re-join / Renew",
-
-                    url=rejoin_url
-                )
-            )
-
-
-            # ------------------------------------------------
-            # USER MESSAGE
-            # ------------------------------------------------
-
-            bot.send_message(
-
-                user_id,
-
-                "⚠️ *Your subscription has expired.*\n\n"
-
-                "Your channel access has been removed.\n\n"
-
-                "To join again or renew, click "
-                "the button below.",
-
-                reply_markup=markup,
-
-                parse_mode="Markdown"
-            )
-
-
-            # ------------------------------------------------
-            # DELETE SUBSCRIPTION
-            # ------------------------------------------------
-
-            users_col.delete_one(
-
-                {
-                    "_id": user["_id"]
-                }
-            )
-
-
-        except Exception as e:
-
-            print(
-                "Expiry error:",
-                e
-            )
-
-
-# ============================================================
-# STARTUP
-# ============================================================
-
-if __name__ == "__main__":
-
-    keep_alive()
-
-
-    scheduler = BackgroundScheduler()
-
-
-    scheduler.add_job(
-
-        kick_expired_users,
-
-        "interval",
-
         minutes=1
     )
 
-
     scheduler.start()
-
 
     bot.remove_webhook()
 
-
     print("Bot is running...")
 
-
     bot.infinity_polling(
-
         timeout=20,
-
         long_polling_timeout=10,
-
         allowed_updates=[
-
             "message",
-
             "callback_query",
-
             "chat_member"
-
         ]
     )

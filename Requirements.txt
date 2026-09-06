@@ -1,6 +1,0 @@
-pyTelegramBotAPI
-pymongo
-APScheduler
-Flask
-timezonefinder
-tzdata

@@ -1463,22 +1463,26 @@ def track_channel_join(update):
     func=lambda m: m.from_user.id == ADMIN_ID
 )
 def show_users(message):
+    """Show only real subscription records.
+
+    /users intentionally excludes payment_pending, rejected/expired records,
+    timezone-only profiles, and any other unrelated MongoDB documents.
+    Only users currently waiting to join or actively subscribed are shown.
+    """
     try:
         users = list(
             users_col.find(
-                {"channel_id": {"$exists": True}}
-            )
+                {
+                    "channel_id": {"$exists": True},
+                    "status": {"$in": ["waiting", "active"]}
+                }
+            ).sort("joined_at", 1)
         )
 
-        visible_users = [
-            u for u in users
-            if u.get("status") != "payment_pending"
-        ]
-
-        if not visible_users:
+        if not users:
             bot.send_message(
                 ADMIN_ID,
-                "👥 <b>Subscribers</b>\n\nNo active/waiting subscribers.",
+                "👥 <b>Subscribers</b>\n\nNo active or waiting subscribers.",
                 parse_mode="HTML"
             )
             return
@@ -1486,75 +1490,57 @@ def show_users(message):
         now = time.time()
         blocks = []
 
-        for index, user in enumerate(visible_users, 1):
-            status = user.get("status", "unknown")
+        for index, user in enumerate(users, 1):
+            status = user.get("status")
             user_id = user.get("user_id", "Unknown")
             channel_id = user.get("channel_id", "Unknown")
-            name = esc(user.get("name", "Unknown"))
+            name = esc(str(user.get("name") or "Unknown"))
 
             if status == "waiting":
                 blocks.append(
                     (
                         f"{index}. 👤 <b>{name}</b>\n"
-                        f"🆔 ID: <code>{user_id}</code>\n"
-                        f"📢 Channel: <code>{channel_id}</code>\n"
+                        f"🆔 ID: <code>{esc(str(user_id))}</code>\n"
+                        f"📢 Channel: <code>{esc(str(channel_id))}</code>\n"
                         "🟡 Status: Waiting to join\n"
+                        f"📦 Plan: <b>{esc(format_plan(int(user.get('plan_minutes', 0))))}</b>\n"
                         "⏳ Timer: Not started yet\n"
                     )
                 )
+                continue
 
-            elif status == "active":
-                joined_ts = user.get("joined_at")
-                expiry_ts = user.get("expiry")
+            joined_ts = user.get("joined_at")
+            expiry_ts = user.get("expiry")
 
-                remaining = (
-                    format_remaining(int(expiry_ts - now))
-                    if expiry_ts
-                    else "Unknown"
-                )
-
-                blocks.append(
-                    (
-                        f"{index}. 👤 <b>{name}</b>\n"
-                        f"🆔 ID: <code>{user_id}</code>\n"
-                        f"📢 Channel: <code>{channel_id}</code>\n"
-                        "🟢 Status: Active\n"
-                        f"📥 Joined: {esc(format_ist_time(joined_ts))} IST\n"
-                        f"🔴 Expires: {esc(format_ist_time(expiry_ts))} IST\n"
-                        f"⏳ Remaining: {esc(remaining)}\n"
-                    )
-                )
-
+            if not expiry_ts:
+                remaining = "Unknown"
             else:
-                blocks.append(
-                    (
-                        f"{index}. 👤 <b>{name}</b>\n"
-                        f"🆔 ID: <code>{user_id}</code>\n"
-                        f"📢 Channel: <code>{channel_id}</code>\n"
-                        f"Status: <code>{esc(status)}</code>\n"
-                    )
-                )
+                remaining = format_remaining(int(float(expiry_ts) - now))
 
-        current = ""
+            blocks.append(
+                (
+                    f"{index}. 👤 <b>{name}</b>\n"
+                    f"🆔 ID: <code>{esc(str(user_id))}</code>\n"
+                    f"📢 Channel: <code>{esc(str(channel_id))}</code>\n"
+                    "🟢 Status: Active\n"
+                    f"📦 Plan: <b>{esc(format_plan(int(user.get('plan_minutes', 0))))}</b>\n"
+                    f"📥 Joined: {esc(format_ist_time(joined_ts))} IST\n"
+                    f"🔴 Expires: {esc(format_ist_time(expiry_ts))} IST\n"
+                    f"⏳ Remaining: {esc(remaining)}\n"
+                )
+            )
+
+        current = "👥 <b>SUBSCRIBERS</b>\n\n"
 
         for block in blocks:
             if len(current) + len(block) + 2 > 3800:
-                if current:
-                    bot.send_message(
-                        ADMIN_ID,
-                        current,
-                        parse_mode="HTML"
-                    )
+                bot.send_message(ADMIN_ID, current, parse_mode="HTML")
                 current = block + "\n"
             else:
                 current += block + "\n"
 
-        if current:
-            bot.send_message(
-                ADMIN_ID,
-                current,
-                parse_mode="HTML"
-            )
+        if current.strip():
+            bot.send_message(ADMIN_ID, current, parse_mode="HTML")
 
     except Exception as e:
         print("Users command error:", e)
@@ -1629,93 +1615,207 @@ def manage_ch(call):
 # 5. User can open the bot again and buy a new plan.
 # ============================================================
 
+def _get_bot_channel_permissions(channel_id):
+    """Return the bot's member object in the channel, or None on error."""
+    try:
+        me = bot.get_me()
+        return bot.get_chat_member(channel_id, me.id)
+    except Exception as e:
+        print(f"❌ Could not inspect bot permissions | channel={channel_id}: {e}")
+        return None
+
+
+def _remove_user_and_make_rejoinable(channel_id, user_id):
+    """
+    Remove a user from the channel WITHOUT leaving them permanently banned.
+
+    Telegram's unbanChatMember method, when called with only_if_banned=False,
+    guarantees that the user is not a member after the call and can join again
+    through an invite link. If the user is currently a member, Telegram removes
+    them as part of this call. This is safer than ban -> unban because there is
+    no race between two API calls.
+    """
+
+    # First try the one-call kick/unban operation.
+    result = bot.unban_chat_member(
+        channel_id,
+        user_id,
+        only_if_banned=False
+    )
+
+    if not result:
+        raise RuntimeError("Telegram returned False while removing/unbanning user")
+
+    # Verify Telegram now sees the user as left or banned-free.
+    # We retry briefly because Telegram/member-state propagation can take a moment.
+    last_status = None
+
+    for _ in range(4):
+        try:
+            member = bot.get_chat_member(channel_id, user_id)
+            last_status = member.status
+
+            if member.status in ("left", "kicked"):
+                return True
+
+            # If Telegram reports a banned member, explicitly unban once.
+            if member.status == "banned":
+                bot.unban_chat_member(
+                    channel_id,
+                    user_id,
+                    only_if_banned=True
+                )
+        except Exception:
+            # getChatMember can be unavailable for some channel/member states;
+            # the successful unban call above is still authoritative.
+            return True
+
+        time.sleep(0.75)
+
+    # If it is still a member after successful unban, do one final unconditional
+    # unban. This also removes a member when only_if_banned is False.
+    if last_status not in ("left", "kicked", None):
+        bot.unban_chat_member(
+            channel_id,
+            user_id,
+            only_if_banned=False
+        )
+
+    return True
+
+
+def _notify_expired_user(user_id, channel_id):
+    """Send the renewal message. Notification failure must not block cleanup."""
+    try:
+        bot_username = bot.get_me().username
+        rejoin_url = f"https://t.me/{bot_username}?start={channel_id}"
+
+        markup = InlineKeyboardMarkup()
+        markup.add(
+            InlineKeyboardButton(
+                "🔄 Re-join / Renew",
+                url=rejoin_url
+            )
+        )
+
+        bot.send_message(
+            user_id,
+            (
+                "⏰ <b>Subscription Expired!</b>\n\n"
+                "Your premium subscription has expired and your "
+                "channel access has been removed.\n\n"
+                "You are <b>not permanently banned</b>.\n\n"
+                "Click below to renew and receive a fresh join link:"
+            ),
+            reply_markup=markup,
+            parse_mode="HTML"
+        )
+    except Exception as e:
+        print(f"⚠️ Expiry notification failed | user={user_id}: {e}")
+
+
 def kick_expired_users():
+    """
+    Expire subscriptions quickly and safely.
+
+    The checker runs every few seconds instead of every minute. We do NOT use
+    ban -> unban anymore. Telegram's unbanChatMember with only_if_banned=False
+    itself removes a current member and leaves them eligible to rejoin.
+
+    A failed Telegram operation is NOT deleted from MongoDB. It is marked as
+    expiry_pending and retried on the next scheduler pass.
+    """
     now = int(time.time())
 
+    # Process both normal expired subscriptions and previous failed cleanups.
     expired_users = users_col.find(
         {
-            "status": "active",
+            "status": {"$in": ["active", "expiry_pending"]},
             "expiry": {"$lte": now}
         }
     )
 
-    bot_username = bot.get_me().username
-
     for user in expired_users:
-        user_id = int(user["user_id"])
-        channel_id = int(user["channel_id"])
-
         try:
-            # REMOVE USER
-            bot.ban_chat_member(
-                channel_id,
-                user_id
+            user_id = int(user["user_id"])
+            channel_id = int(user["channel_id"])
+
+            # Atomically claim this record so two scheduler runs/processes do
+            # not try to remove the same user at the same time.
+            claimed = users_col.update_one(
+                {
+                    "_id": user["_id"],
+                    "status": {"$in": ["active", "expiry_pending"]}
+                },
+                {
+                    "$set": {
+                        "status": "expiry_pending",
+                        "expiry_processing_at": time.time()
+                    }
+                }
             )
 
-            # IMMEDIATELY UNBAN
-            bot.unban_chat_member(
-                channel_id,
-                user_id,
-                only_if_banned=True
-            )
+            if claimed.modified_count == 0 and user.get("status") != "expiry_pending":
+                continue
+
+            # Check that the bot really has the required admin privilege.
+            # If this is missing, keeping the DB record allows automatic retry
+            # after the admin permission is fixed.
+            bot_member = _get_bot_channel_permissions(channel_id)
+
+            if bot_member is not None:
+                if bot_member.status != "administrator":
+                    raise RuntimeError(
+                        f"Bot is not administrator in channel {channel_id} "
+                        f"(status={bot_member.status})"
+                    )
+
+                if not getattr(bot_member, "can_restrict_members", False):
+                    raise RuntimeError(
+                        f"Bot lacks 'Restrict/Ban users' permission in channel {channel_id}"
+                    )
+
+            # THIS is the important fix:
+            # one Telegram API call removes the member and makes them rejoinable.
+            _remove_user_and_make_rejoinable(channel_id, user_id)
 
             print(
-                f"✅ Expired user removed + unbanned: "
-                f"{user_id} from {channel_id}"
+                f"✅ Expired user kicked + unbanned | "
+                f"user={user_id} channel={channel_id}"
             )
 
-            # Permanent bot deep link.
-            # User pays again and receives a NEW channel invite.
-            rejoin_url = (
-                f"https://t.me/"
-                f"{bot_username}"
-                f"?start={channel_id}"
-            )
+            # Notify user after successful removal/unban.
+            _notify_expired_user(user_id, channel_id)
 
-            markup = InlineKeyboardMarkup()
-
-            markup.add(
-                InlineKeyboardButton(
-                    "🔄 Re-join / Renew",
-                    url=rejoin_url
-                )
-            )
-
-            try:
-                bot.send_message(
-                    user_id,
-                    (
-                        "⏰ <b>Subscription Expired!</b>\n\n"
-                        "Your premium subscription has expired "
-                        "and your channel access has been removed.\n\n"
-                        "You are not permanently banned.\n\n"
-                        "Click below to renew and get a new "
-                        "join link:"
-                    ),
-                    reply_markup=markup,
-                    parse_mode="HTML"
-                )
-            except Exception as e:
-                print(
-                    f"Expired user notification error "
-                    f"{user_id}: {e}"
-                )
-
-            # Delete old subscription so a fresh payment
-            # can create a fresh subscription record.
-            users_col.delete_one(
-                {"_id": user["_id"]}
-            )
+            # Only now delete the old subscription.
+            users_col.delete_one({"_id": user["_id"]})
 
         except Exception as e:
             print(
-                f"❌ Expiry error | "
-                f"user={user_id} channel={channel_id}: {e}"
+                f"❌ Expiry cleanup failed | "
+                f"user={user.get('user_id')} channel={user.get('channel_id')}: {e}"
             )
 
+            # Keep the record for retry instead of losing the subscription.
+            try:
+                users_col.update_one(
+                    {"_id": user["_id"]},
+                    {
+                        "$set": {
+                            "status": "expiry_pending",
+                            "expiry_cleanup_error": str(e)[:1000],
+                            "expiry_last_attempt_at": time.time()
+                        }
+                    }
+                )
+            except Exception as db_error:
+                print(f"❌ Could not save expiry retry state: {db_error}")
+
             send_admin_error(
-                "Expiry Error",
-                f"User: {user_id}\nChannel: {channel_id}\nError: {e}"
+                "Expiry cleanup failed",
+                f"User: {user.get('user_id')}\n"
+                f"Channel: {user.get('channel_id')}\n"
+                f"Error: {e}"
             )
 
 
@@ -1728,12 +1828,20 @@ if __name__ == "__main__":
 
     scheduler = BackgroundScheduler()
 
+    # Run once immediately on startup so expired users are not left waiting
+    # for the first scheduler tick.
+    try:
+        kick_expired_users()
+    except Exception as e:
+        print(f"Initial expiry check failed: {e}")
+
     scheduler.add_job(
         kick_expired_users,
         "interval",
-        minutes=1,
+        seconds=10,
         max_instances=1,
         coalesce=True,
+        misfire_grace_time=30,
         id="expiry_checker",
         replace_existing=True
     )

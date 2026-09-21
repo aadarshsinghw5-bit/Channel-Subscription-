@@ -1361,32 +1361,51 @@ def track_channel_join(update):
             return
 
         subscription = users_col.find_one(
-            {
-                "user_id": user.id,
-                "channel_id": ch_id,
-                "status": "waiting"
-            }
+            {"user_id": user.id, "channel_id": ch_id, "status": "waiting"}
         )
 
-        if not subscription:
-            return
+        if subscription:
+            # First join after approval: start the subscription timer.
+            joined_timestamp = time.time()
+            plan_minutes = int(subscription["plan_minutes"])
+            expiry_timestamp = joined_timestamp + (plan_minutes * 60)
 
-        joined_timestamp = time.time()
-        plan_minutes = int(subscription["plan_minutes"])
-        expiry_timestamp = joined_timestamp + (plan_minutes * 60)
-
-        users_col.update_one(
-            {"_id": subscription["_id"]},
-            {
-                "$set": {
-                    "joined_at": joined_timestamp,
-                    "expiry": expiry_timestamp,
-                    "status": "active",
-                    "name": user.first_name or "",
-                    "username": user.username or ""
+            users_col.update_one(
+                {"_id": subscription["_id"]},
+                {
+                    "$set": {
+                        "joined_at": joined_timestamp,
+                        "expiry": expiry_timestamp,
+                        "status": "active",
+                        "name": user.first_name or "",
+                        "username": user.username or ""
+                    },
+                    "$unset": {"left_at": ""}
                 }
-            }
-        )
+            )
+        else:
+            # User had joined before, left, and rejoined within 48h.
+            subscription = users_col.find_one(
+                {"user_id": user.id, "channel_id": ch_id, "status": "left"}
+            )
+            if not subscription:
+                return
+
+            joined_timestamp = time.time()
+            plan_minutes = int(subscription.get("plan_minutes", 0))
+            expiry_timestamp = subscription.get("expiry")
+
+            users_col.update_one(
+                {"_id": subscription["_id"]},
+                {
+                    "$set": {
+                        "status": "active",
+                        "name": user.first_name or "",
+                        "username": user.username or ""
+                    },
+                    "$unset": {"left_at": ""}
+                }
+            )
 
         # Revoke the one-time invite after successful join.
         invite_link = subscription.get("invite_link")
@@ -1452,6 +1471,83 @@ def track_channel_join(update):
 
     except Exception as e:
         send_admin_error("Join Tracking Error", e)
+
+
+# ============================================================
+# CHANNEL LEAVE DETECTION
+# ============================================================
+
+@bot.chat_member_handler()
+def track_channel_leave(update):
+    try:
+        new_status = update.new_chat_member.status
+        old_status = update.old_chat_member.status
+        user = update.new_chat_member.user
+        ch_id = update.chat.id
+
+        if old_status not in {"member", "administrator"}:
+            return
+        if new_status not in {"left", "kicked"}:
+            return
+
+        subscription = users_col.find_one({
+            "user_id": user.id,
+            "channel_id": ch_id,
+            "status": "active"
+        })
+        if not subscription:
+            return
+
+        users_col.update_one(
+            {"_id": subscription["_id"]},
+            {"$set": {
+                "status": "left",
+                "left_at": time.time(),
+                "name": user.first_name or "",
+                "username": user.username or ""
+            }}
+        )
+        print(f"🚪 User left channel | user={user.id} channel={ch_id}")
+    except Exception as e:
+        send_admin_error("Leave Tracking Error", e)
+
+
+# ============================================================
+# /CLEANUSERS
+# ============================================================
+
+@bot.message_handler(
+    commands=["cleanusers"],
+    func=lambda m: m.from_user.id == ADMIN_ID
+)
+def clean_users(message):
+    """Remove waiting/left subscriptions older than 48 hours only."""
+    try:
+        cutoff = time.time() - (48 * 60 * 60)
+
+        waiting_result = users_col.delete_many({
+            "status": "waiting",
+            "approved_at": {"$lt": cutoff}
+        })
+        left_result = users_col.delete_many({
+            "status": "left",
+            "left_at": {"$lt": cutoff}
+        })
+
+        total = waiting_result.deleted_count + left_result.deleted_count
+        bot.send_message(
+            ADMIN_ID,
+            (
+                "🧹 <b>Clean Users Complete</b>\n\n"
+                f"🗑 Removed: <b>{total}</b>\n\n"
+                f"⏳ Approved but never joined (48h+): <b>{waiting_result.deleted_count}</b>\n"
+                f"🚪 Left channel (48h+): <b>{left_result.deleted_count}</b>\n\n"
+                "🟢 Active and payment-pending users were not touched."
+            ),
+            parse_mode="HTML"
+        )
+    except Exception as e:
+        send_admin_error("Clean Users Error", e)
 
 
 # ============================================================

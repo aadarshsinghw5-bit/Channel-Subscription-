@@ -1349,12 +1349,41 @@ def track_channel_join(update):
         ch_id = update.chat.id
 
         joined_statuses = {"member", "administrator"}
+        left_statuses = {"left", "kicked"}
+
+        # Handle member -> left/kicked in this same handler.
+        # This is important because multiple chat_member handlers can
+        # short-circuit each other depending on the polling framework.
+        if old_status in joined_statuses and new_status in left_statuses:
+            subscription = users_col.find_one(
+                {
+                    "user_id": user.id,
+                    "channel_id": ch_id,
+                    "status": "active"
+                }
+            )
+
+            if subscription:
+                left_timestamp = time.time()
+                users_col.update_one(
+                    {"_id": subscription["_id"]},
+                    {
+                        "$set": {
+                            "status": "left",
+                            "left_at": left_timestamp,
+                            "name": user.first_name or "",
+                            "username": user.username or ""
+                        }
+                    }
+                )
+                print(
+                    f"🚪 USER LEFT | user={user.id} "
+                    f"channel={ch_id} left_at={left_timestamp}"
+                )
+            return
 
         # Ignore changes where the user was already a member.
-        if (
-            new_status in joined_statuses
-            and old_status in joined_statuses
-        ):
+        if new_status in joined_statuses and old_status in joined_statuses:
             return
 
         if new_status not in joined_statuses:
@@ -1471,45 +1500,6 @@ def track_channel_join(update):
 
     except Exception as e:
         send_admin_error("Join Tracking Error", e)
-
-
-# ============================================================
-# CHANNEL LEAVE DETECTION
-# ============================================================
-
-@bot.chat_member_handler()
-def track_channel_leave(update):
-    try:
-        new_status = update.new_chat_member.status
-        old_status = update.old_chat_member.status
-        user = update.new_chat_member.user
-        ch_id = update.chat.id
-
-        if old_status not in {"member", "administrator"}:
-            return
-        if new_status not in {"left", "kicked"}:
-            return
-
-        subscription = users_col.find_one({
-            "user_id": user.id,
-            "channel_id": ch_id,
-            "status": "active"
-        })
-        if not subscription:
-            return
-
-        users_col.update_one(
-            {"_id": subscription["_id"]},
-            {"$set": {
-                "status": "left",
-                "left_at": time.time(),
-                "name": user.first_name or "",
-                "username": user.username or ""
-            }}
-        )
-        print(f"🚪 User left channel | user={user.id} channel={ch_id}")
-    except Exception as e:
-        send_admin_error("Leave Tracking Error", e)
 
 
 # ============================================================

@@ -1268,18 +1268,30 @@ def approve_now(call):
             parse_mode="HTML"
         )
 
-        bot.edit_message_text(
-            (
-                "✅ <b>Payment Approved!</b>\n\n"
-                f"👤 User ID: <code>{u_id}</code>\n"
-                f"📦 Plan: <b>{esc(plan_name)}</b>\n\n"
-                "⏳ Waiting for user to join...\n"
-                "Timer has <b>NOT</b> started yet."
-            ),
-            call.message.chat.id,
-            call.message.message_id,
-            parse_mode="HTML"
+        admin_result_text = (
+            "✅ <b>Payment Approved!</b>\n\n"
+            f"👤 User ID: <code>{u_id}</code>\n"
+            f"📦 Plan: <b>{esc(plan_name)}</b>\n\n"
+            "⏳ Waiting for user to join...\n"
+            "Timer has <b>NOT</b> started yet."
         )
+
+        if call.message.content_type in ("photo", "document"):
+            bot.edit_message_caption(
+                admin_result_text,
+                call.message.chat.id,
+                call.message.message_id,
+                parse_mode="HTML",
+                reply_markup=None
+            )
+        else:
+            bot.edit_message_text(
+                admin_result_text,
+                call.message.chat.id,
+                call.message.message_id,
+                parse_mode="HTML",
+                reply_markup=None
+            )
 
         answer_callback(call, "✅ Payment approved!")
 
@@ -1335,16 +1347,28 @@ def reject_payment(call):
         )
 
         try:
-            bot.edit_message_text(
-                (
-                    "❌ <b>Payment Rejected!</b>\n\n"
-                    f"User ID: <code>{u_id}</code>\n\n"
-                    "The user has been notified."
-                ),
-                call.message.chat.id,
-                call.message.message_id,
-                parse_mode="HTML"
+            rejection_text = (
+                "❌ <b>Payment Rejected!</b>\n\n"
+                f"User ID: <code>{u_id}</code>\n\n"
+                "The user has been notified."
             )
+
+            if call.message.content_type in ("photo", "document"):
+                bot.edit_message_caption(
+                    rejection_text,
+                    call.message.chat.id,
+                    call.message.message_id,
+                    parse_mode="HTML",
+                    reply_markup=None
+                )
+            else:
+                bot.edit_message_text(
+                    rejection_text,
+                    call.message.chat.id,
+                    call.message.message_id,
+                    parse_mode="HTML",
+                    reply_markup=None
+                )
         except Exception:
             pass
 

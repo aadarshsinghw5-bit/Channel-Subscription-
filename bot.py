@@ -1021,40 +1021,22 @@ def user_pays(call):
 def admin_notify(call):
     try:
         _, ch_id_raw, mins_raw = call.data.split("_")
-
         ch_id = int(ch_id_raw)
         mins = int(mins_raw)
         user = call.from_user
 
-        ch_data = channels_col.find_one(
-            {"channel_id": ch_id}
-        )
-
+        ch_data = channels_col.find_one({"channel_id": ch_id})
         if not ch_data:
-            answer_callback(
-                call,
-                "❌ Channel not found.",
-                show_alert=True
-            )
+            answer_callback(call, "❌ Channel not found.", show_alert=True)
             return
 
-        price = ch_data["plans"].get(str(mins))
-
+        price = ch_data.get("plans", {}).get(str(mins))
         if price is None:
-            answer_callback(
-                call,
-                "❌ Plan not found.",
-                show_alert=True
-            )
+            answer_callback(call, "❌ Plan not found.", show_alert=True)
             return
-
-        plan_name = format_plan(mins)
 
         users_col.update_one(
-            {
-                "user_id": user.id,
-                "channel_id": ch_id
-            },
+            {"user_id": user.id, "channel_id": ch_id},
             {
                 "$set": {
                     "user_id": user.id,
@@ -1062,79 +1044,119 @@ def admin_notify(call):
                     "name": user.first_name or "",
                     "username": user.username or "",
                     "plan_minutes": mins,
-                    "status": "payment_pending",
+                    "status": "awaiting_screenshot",
                     "requested_at": time.time()
                 },
                 "$unset": {
-                    "joined_at": "",
-                    "expiry": "",
-                    "invite_link": "",
-                    "invite_link_expires_at": ""
+                    "joined_at": "", "expiry": "", "invite_link": "",
+                    "invite_link_expires_at": "", "payment_screenshot_file_id": "",
+                    "screenshot_received_at": ""
                 }
             },
             upsert=True
         )
 
-        markup = InlineKeyboardMarkup()
-
-        markup.add(
-            InlineKeyboardButton(
-                "✅ Approve",
-                callback_data=f"app_{user.id}_{ch_id}_{mins}"
-            ),
-            InlineKeyboardButton(
-                "❌ Reject",
-                callback_data=f"rej_{user.id}_{ch_id}"
-            )
+        answer_callback(call, "📸 Upload your payment screenshot in the chat.")
+        bot.send_message(
+            call.message.chat.id,
+            "🧾 <b>Payment Screenshot Required</b>\n\n"
+            "Please upload a clear screenshot of your successful payment as a photo.\n\n"
+            "After receiving it, we will forward your payment proof to the admin for verification.",
+            parse_mode="HTML"
         )
 
-        admin_text = (
-            "🔔 <b>Payment Verification Required!</b>\n\n"
-            f"👤 User: {esc(user.first_name or '')}\n"
+    except Exception as e:
+        answer_callback(call, "❌ Something went wrong!", show_alert=True)
+        send_admin_error("Payment Screenshot Request Error", e)
+
+
+# ============================================================
+# RECEIVE PAYMENT SCREENSHOT
+# ============================================================
+
+def waiting_for_payment_screenshot(message):
+    return bool(users_col.find_one({
+        "user_id": message.from_user.id,
+        "status": "awaiting_screenshot"
+    }))
+
+
+@bot.message_handler(
+    content_types=["photo", "document"],
+    func=waiting_for_payment_screenshot
+)
+def receive_payment_screenshot(message):
+    try:
+        user = message.from_user
+        record = users_col.find_one({
+            "user_id": user.id,
+            "status": "awaiting_screenshot"
+        })
+        if not record:
+            return
+
+        file_id = None
+        is_photo = bool(message.photo)
+        if message.photo:
+            file_id = message.photo[-1].file_id
+        elif message.document and (message.document.mime_type or "").startswith("image/"):
+            file_id = message.document.file_id
+
+        if not file_id:
+            bot.reply_to(message, "❌ Please upload the screenshot as an image/photo.")
+            return
+
+        ch_id = int(record["channel_id"])
+        mins = int(record["plan_minutes"])
+        ch_data = channels_col.find_one({"channel_id": ch_id})
+        if not ch_data:
+            bot.reply_to(message, "❌ Channel details not found. Please contact admin.")
+            return
+
+        price = ch_data.get("plans", {}).get(str(mins), "Unknown")
+        plan_name = format_plan(mins)
+        users_col.update_one(
+            {"_id": record["_id"]},
+            {"$set": {
+                "status": "payment_pending",
+                "payment_screenshot_file_id": file_id,
+                "screenshot_received_at": time.time(),
+                "name": user.first_name or "",
+                "username": user.username or ""
+            }}
+        )
+
+        markup = InlineKeyboardMarkup()
+        markup.add(
+            InlineKeyboardButton("✅ Approve", callback_data=f"app_{user.id}_{ch_id}_{mins}"),
+            InlineKeyboardButton("❌ Reject", callback_data=f"rej_{user.id}_{ch_id}")
+        )
+        admin_caption = (
+            "🔔 <b>Payment Verification Required</b>\n\n"
+            f"👤 Name: {esc(user.first_name or '')}\n"
             f"🆔 User ID: <code>{user.id}</code>\n"
+            f"🔗 Username: {('@' + esc(user.username)) if user.username else 'Not set'}\n"
             f"📢 Channel: {esc(ch_data.get('name', 'Unknown'))}\n"
             f"📦 Plan: {esc(plan_name)}\n"
             f"💰 Price: ₹{esc(price)}"
         )
 
-        bot.send_message(
-            ADMIN_ID,
-            admin_text,
-            reply_markup=markup,
+        if is_photo:
+            bot.send_photo(ADMIN_ID, file_id, caption=admin_caption,
+                           reply_markup=markup, parse_mode="HTML")
+        else:
+            bot.send_document(ADMIN_ID, file_id, caption=admin_caption,
+                              reply_markup=markup, parse_mode="HTML")
+
+        bot.reply_to(
+            message,
+            "✅ <b>Screenshot received successfully!</b>\n\n"
+            "Your payment proof has been sent to the admin. Please wait for verification.",
             parse_mode="HTML"
         )
-
-        u_markup = InlineKeyboardMarkup()
-        contact_url = get_contact_url()
-
-        if contact_url:
-            u_markup.add(
-                InlineKeyboardButton(
-                    "📞 Contact Admin",
-                    url=contact_url
-                )
-            )
-
-        bot.send_message(
-            call.message.chat.id,
-            (
-                "✅ Your payment request has been sent.\n\n"
-                "Please wait for Admin approval.\n\n"
-                f"Admin: {esc(get_contact_username())}"
-            ),
-            reply_markup=u_markup,
-            parse_mode="HTML"
-        )
-
-        answer_callback(call, "✅ Request sent!")
-
     except Exception as e:
-        answer_callback(
-            call,
-            "❌ Error!",
-            show_alert=True
-        )
-        send_admin_error("Payment Request Error", e)
+        send_admin_error("Payment Screenshot Error", e)
+        bot.reply_to(message, "❌ Could not submit screenshot. Please try again or contact admin.")
 
 
 # ============================================================

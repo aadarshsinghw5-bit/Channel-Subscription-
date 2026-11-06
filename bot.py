@@ -1025,6 +1025,26 @@ def admin_notify(call):
         mins = int(mins_raw)
         user = call.from_user
 
+        # Do not create another screenshot request while one is already in progress.
+        existing_request = users_col.find_one({
+            "user_id": user.id,
+            "channel_id": ch_id
+        })
+        if existing_request:
+            current_status = existing_request.get("status")
+            if current_status == "payment_pending":
+                answer_callback(call, "⏳ Your screenshot is already received. Please wait for admin approval.", show_alert=True)
+                bot.send_message(
+                    call.message.chat.id,
+                    "⏳ <b>Waiting for Admin Approval</b>\n\n"
+                    "Your payment screenshot has already been received. Please wait while the admin verifies it.",
+                    parse_mode="HTML"
+                )
+                return
+            if current_status in ("awaiting_screenshot", "screenshot_processing"):
+                answer_callback(call, "📸 Please upload the screenshot you were asked for.", show_alert=True)
+                return
+
         ch_data = channels_col.find_one({"channel_id": ch_id})
         if not ch_data:
             answer_callback(call, "❌ Channel not found.", show_alert=True)
@@ -1115,8 +1135,10 @@ def receive_payment_screenshot(message):
 
         price = ch_data.get("plans", {}).get(str(mins), "Unknown")
         plan_name = format_plan(mins)
-        users_col.update_one(
-            {"_id": record["_id"]},
+        # Atomically claim the first screenshot. Extra uploads/callback races
+        # must never create duplicate admin verification messages.
+        claimed = users_col.update_one(
+            {"_id": record["_id"], "status": "awaiting_screenshot"},
             {"$set": {
                 "status": "payment_pending",
                 "payment_screenshot_file_id": file_id,
@@ -1125,6 +1147,14 @@ def receive_payment_screenshot(message):
                 "username": user.username or ""
             }}
         )
+        if claimed.modified_count != 1:
+            bot.reply_to(
+                message,
+                "⏳ <b>Your payment screenshot is already received.</b>\n\n"
+                "Please wait for admin approval. You do not need to send it again.",
+                parse_mode="HTML"
+            )
+            return
 
         markup = InlineKeyboardMarkup()
         markup.add(
@@ -1155,6 +1185,15 @@ def receive_payment_screenshot(message):
             parse_mode="HTML"
         )
     except Exception as e:
+        try:
+            if 'record' in locals() and record:
+                users_col.update_one(
+                    {"_id": record["_id"], "status": "payment_pending"},
+                    {"$set": {"status": "awaiting_screenshot"},
+                     "$unset": {"payment_screenshot_file_id": "", "screenshot_received_at": ""}}
+                )
+        except Exception:
+            pass
         send_admin_error("Payment Screenshot Error", e)
         bot.reply_to(message, "❌ Could not submit screenshot. Please try again or contact admin.")
 
